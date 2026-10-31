@@ -1,0 +1,33 @@
+# Personal source documents and extracted financial data
+*.pdf
+*.xml
+docs/expenses_test*.json
+
+# Local credentials and diagnostic output
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+
+# Local dependencies and build output
+.tools/
+frontend/node_modules/
+frontend/dist/
+backend/expense-tracker
+backend/backend
+.DS_Store
+
+# Local ledger and SQLite sidecar files
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-*
+*.sqlite.*
+*.db
+*.db-*
+*.db.*

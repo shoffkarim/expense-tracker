@@ -1,0 +1,317 @@
+package main
+
+import (
+	"context"
+	"database/sql"
+	_ "embed"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	_ "github.com/mattn/go-sqlite3"
+)
+
+const maxMoney int64 = 9007199254740991
+
+//go:embed schema.sql
+var schema string
+
+type problem struct {
+	status  int
+	message string
+}
+
+func (e *problem) Error() string    { return e.message }
+func invalid(message string) error  { return &problem{400, message} }
+func conflict(message string) error { return &problem{409, message} }
+
+type Store struct {
+	db  *sql.DB
+	now func() time.Time
+}
+
+func openStore(path string) (*Store, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	if err = os.MkdirAll(filepath.Dir(absolute), 0700); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(absolute, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err = file.Close(); err != nil {
+		return nil, err
+	}
+	dsn := (&url.URL{Scheme: "file", Path: absolute}).String() +
+		"?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000&_txlock=immediate&_synchronous=FULL"
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, err
+	}
+	// One connection serializes writes, including read-modify-write balance changes.
+	db.SetMaxOpenConns(1)
+	s := &Store{db: db, now: time.Now}
+	if err = s.migrate(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Store) migrate() error {
+	return s.write(context.Background(), func(tx *sql.Tx) error {
+		var version int
+		if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+			return err
+		}
+		if version > 2 {
+			return errors.New("база создана более новой версией приложения")
+		}
+		if version == 2 {
+			return nil
+		}
+		if version == 1 {
+			if _, err := tx.Exec(rulesSchema); err != nil {
+				return err
+			}
+			_, err := tx.Exec("PRAGMA user_version = 2")
+			return err
+		}
+		if _, err := tx.Exec(schema); err != nil {
+			return err
+		}
+		seeds := []Category{
+			{Kind: "expense", Name: "Еда", Color: "#c87946", Icon: "food"},
+			{Kind: "expense", Name: "Дом", Color: "#658c73", Icon: "home"},
+			{Kind: "expense", Name: "Машина", Color: "#627eaa", Icon: "car"},
+			{Kind: "expense", Name: "Медицина", Color: "#b66a7e", Icon: "health"},
+			{Kind: "expense", Name: "Прочее", Color: "#8c7aa9", Icon: "other"},
+			{Kind: "income", Name: "Зарплата", Color: "#658c73", Icon: "work"},
+			{Kind: "income", Name: "Инвестиции", Color: "#627eaa", Icon: "chart"},
+			{Kind: "income", Name: "Подарки", Color: "#b66a7e", Icon: "gift"},
+			{Kind: "income", Name: "Прочее", Color: "#8c7aa9", Icon: "other"},
+		}
+		for _, c := range seeds {
+			if _, err := tx.Exec("INSERT INTO categories(kind,name,color,icon) VALUES(?,?,?,?)", c.Kind, c.Name, c.Color, c.Icon); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(rulesSchema); err != nil {
+			return err
+		}
+		_, err := tx.Exec("PRAGMA user_version = 2")
+		return err
+	})
+}
+
+func (s *Store) write(ctx context.Context, fn func(*sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+type Account struct {
+	ID                  int64  `json:"id"`
+	Name                string `json:"name"`
+	Color               string `json:"color"`
+	Icon                string `json:"icon"`
+	InitialBalanceMinor int64  `json:"initialBalanceMinor"`
+	BalanceMinor        int64  `json:"balanceMinor"`
+	Archived            bool   `json:"archived"`
+}
+type AccountInput struct {
+	Name         string `json:"name"`
+	Color        string `json:"color"`
+	Icon         string `json:"icon"`
+	BalanceMinor int64  `json:"balanceMinor"`
+}
+type Category struct {
+	ID          int64  `json:"id"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name"`
+	Color       string `json:"color"`
+	Icon        string `json:"icon"`
+	Archived    bool   `json:"archived"`
+	AmountMinor int64  `json:"amountMinor"`
+}
+type CategoryInput struct {
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
+	Color string `json:"color"`
+	Icon  string `json:"icon"`
+}
+type Screen struct {
+	Month             string     `json:"month"`
+	TotalBalanceMinor int64      `json:"totalBalanceMinor"`
+	Accounts          []Account  `json:"accounts"`
+	Categories        []Category `json:"categories"`
+}
+
+var colorPattern = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+var icons = map[string]bool{"wallet": true, "bank": true, "card": true, "cash": true, "food": true, "home": true, "car": true, "health": true, "other": true, "work": true, "chart": true, "gift": true, "travel": true, "shopping": true, "coffee": true, "education": true}
+
+func validAppearance(name, color, icon string) error {
+	if strings.TrimSpace(name) == "" || utf8.RuneCountInString(name) > 80 {
+		return invalid("Название должно содержать от 1 до 80 символов.")
+	}
+	if !colorPattern.MatchString(color) || !icons[icon] {
+		return invalid("Выберите цвет и иконку из доступного набора.")
+	}
+	return nil
+}
+
+func (s *Store) screen(ctx context.Context, activeOnly bool) (Screen, error) {
+	out := Screen{Month: s.now().Format("2006-01"), Accounts: []Account{}, Categories: []Category{}}
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, "SELECT id,name,color,icon,initial_balance_minor,balance_minor,archived FROM accounts ORDER BY archived,id")
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var a Account
+			if err = rows.Scan(&a.ID, &a.Name, &a.Color, &a.Icon, &a.InitialBalanceMinor, &a.BalanceMinor, &a.Archived); err != nil {
+				rows.Close()
+				return err
+			}
+			if !a.Archived {
+				out.TotalBalanceMinor, err = checkedAdd(out.TotalBalanceMinor, a.BalanceMinor)
+				if err != nil {
+					rows.Close()
+					return err
+				}
+			}
+			if !activeOnly || !a.Archived {
+				out.Accounts = append(out.Accounts, a)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		rows, err = tx.QueryContext(ctx, `SELECT c.id,c.kind,c.name,c.color,c.icon,c.archived,COALESCE(m.amount_minor,0)
+			FROM categories c LEFT JOIN category_months m ON m.category_id=c.id AND m.month=? ORDER BY c.archived,c.id`, out.Month)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var c Category
+			if err = rows.Scan(&c.ID, &c.Kind, &c.Name, &c.Color, &c.Icon, &c.Archived, &c.AmountMinor); err != nil {
+				return err
+			}
+			if !activeOnly || !c.Archived {
+				out.Categories = append(out.Categories, c)
+			}
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+func checkedAdd(a, b int64) (int64, error) {
+	if a > maxMoney || a < -maxMoney || (b > 0 && a > maxMoney-b) || (b < 0 && a < -maxMoney-b) {
+		return 0, invalid("Сумма выходит за поддерживаемый диапазон.")
+	}
+	return a + b, nil
+}
+
+func (s *Store) saveAccount(ctx context.Context, id int64, in AccountInput) (int64, error) {
+	if err := validAppearance(in.Name, in.Color, in.Icon); err != nil {
+		return 0, err
+	}
+	if _, err := checkedAdd(0, in.BalanceMinor); err != nil {
+		return 0, err
+	}
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		if id == 0 {
+			result, err := tx.ExecContext(ctx, "INSERT INTO accounts(name,color,icon,initial_balance_minor,balance_minor) VALUES(?,?,?,?,?)", strings.TrimSpace(in.Name), in.Color, in.Icon, in.BalanceMinor, in.BalanceMinor)
+			if err != nil {
+				return err
+			}
+			id, err = result.LastInsertId()
+			return err
+		}
+		var before int64
+		var archived bool
+		if err := tx.QueryRowContext(ctx, "SELECT balance_minor,archived FROM accounts WHERE id=?", id).Scan(&before, &archived); err != nil {
+			return err
+		}
+		if archived {
+			return conflict("Счёт находится в архиве.")
+		}
+		if before != in.BalanceMinor {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO balance_adjustments(account_id,before_minor,after_minor) VALUES(?,?,?)", id, before, in.BalanceMinor); err != nil {
+				return err
+			}
+		}
+		_, err := tx.ExecContext(ctx, "UPDATE accounts SET name=?,color=?,icon=?,balance_minor=? WHERE id=?", strings.TrimSpace(in.Name), in.Color, in.Icon, in.BalanceMinor, id)
+		return err
+	})
+	return id, err
+}
+
+func (s *Store) saveCategory(ctx context.Context, id int64, in CategoryInput) (int64, error) {
+	if err := validAppearance(in.Name, in.Color, in.Icon); err != nil {
+		return 0, err
+	}
+	if in.Kind != "income" && in.Kind != "expense" {
+		return 0, invalid("Выберите тип категории.")
+	}
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		if id == 0 {
+			result, err := tx.ExecContext(ctx, "INSERT INTO categories(kind,name,color,icon) VALUES(?,?,?,?)", in.Kind, strings.TrimSpace(in.Name), in.Color, in.Icon)
+			if err != nil {
+				return err
+			}
+			id, err = result.LastInsertId()
+			return err
+		}
+		var kind string
+		var archived bool
+		if err := tx.QueryRowContext(ctx, "SELECT kind,archived FROM categories WHERE id=?", id).Scan(&kind, &archived); err != nil {
+			return err
+		}
+		if archived {
+			return conflict("Категория находится в архиве.")
+		}
+		if kind != in.Kind {
+			return invalid("Тип существующей категории менять нельзя.")
+		}
+		_, err := tx.ExecContext(ctx, "UPDATE categories SET name=?,color=?,icon=? WHERE id=?", strings.TrimSpace(in.Name), in.Color, in.Icon, id)
+		return err
+	})
+	return id, err
+}
+
+func (s *Store) archive(ctx context.Context, table string, id int64) error {
+	if table != "accounts" && table != "categories" {
+		return errors.New("invalid archive table")
+	}
+	return s.write(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE %s SET archived=1 WHERE id=?", table), id)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err == nil && n == 0 {
+			return sql.ErrNoRows
+		}
+		return err
+	})
+}
