@@ -72,7 +72,7 @@ type OperationInput = {
 
 `DELETE /transactions/{id}` отменяет влияние операции на балансы/итоги, помечает удалённой и возвращает `{ok:true}`. Повторное удаление возвращает `404`.
 
-`GET /transactions?accountId=&categoryId=&from=&to=&page=1`: фильтры необязательны; даты включительны. Ответ `{transactions, total, page, pageSize:30}`. Каждая операция содержит `OperationInput`, `id` и при наличии `importId`, `sourcePage`, `rowNumber`. Порядок: дата по убыванию, затем ID по убыванию. Удалённые записи исключены.
+`GET /transactions?accountId=&categoryId=&from=&to=&page=1`: фильтры необязательны; даты включительны. Ответ `{transactions, total, page, pageSize:20}`. Каждая операция содержит `OperationInput`, `id` и при наличии `importId`, `sourcePage`, `rowNumber`. Порядок: дата по убыванию, затем ID по убыванию. Удалённые записи исключены.
 
 ## Парсинг PDF
 

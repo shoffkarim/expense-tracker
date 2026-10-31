@@ -24,10 +24,11 @@ const ok = data => ({ ok: true, status: 200, json: async () => data });
 beforeEach(() => {
   window.location.hash = '#/dashboard';
   window.confirm = () => true;
+  window.scrollTo = () => {};
   requests = [];
   respond = async (url, options) => {
     if (url === '/api/dashboard' || url === '/api/import-screen') return ok(base);
-    if (url.startsWith('/api/transactions?')) return ok({ transactions: [], total: 0, page: 1, pageSize: 30 });
+    if (url.startsWith('/api/transactions?')) return ok({ transactions: [], total: 0, page: 1, pageSize: 20 });
     if (options.method === 'POST' || options.method === 'PATCH') return ok({ id: 10 });
     return ok({ ok: true });
   };
@@ -310,3 +311,40 @@ test('rules page creates a rule', async () => {
   assert.match(document.querySelector('.duplicate-note').textContent, /Похожие строки в этой выписке: №3/);
   assert.ok(requests.filter(r => r.url === '/api/imports/check').every(r => r.body.rows.every(row => !('statementNumber' in row))));
  });
+
+test('history loads pages on intersection and resets filters on re-entry', async () => {
+  let intersect;
+  globalThis.IntersectionObserver = class {
+    constructor(callback) { intersect = callback; }
+    observe() {}
+    disconnect() { intersect = null; }
+  };
+  const navigate = async hash => act(async () => {
+    window.location.hash = hash;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  });
+  respond = async url => {
+    if (url === '/api/dashboard' || url === '/api/import-screen') return ok(base);
+    const query = new URL(url, window.location.origin).searchParams;
+    const page = Number(query.get('page'));
+    return ok({ total: 23, page, pageSize: 20, transactions: Array.from({ length: page === 1 ? 20 : 3 }, (_, i) => ({
+      id: 23 - (page - 1) * 20 - i, kind: 'expense', date: '2026-10-01',
+      sourceAccountId: 1, categoryId: 1, amountMinor: 100, description: '', comment: '',
+    })) });
+  };
+  await render(h(App));
+  assert.equal(requests.filter(r => r.url.startsWith('/api/transactions?')).length, 0);
+  await navigate('#/history');
+  assert.equal(document.querySelectorAll('.history-row').length, 20);
+  await act(async () => { intersect([{ isIntersecting: true }]); intersect([{ isIntersecting: true }]); });
+  assert.equal(document.querySelectorAll('.history-row').length, 23);
+  assert.equal(requests.filter(r => r.url.includes('page=2')).length, 1);
+  assert.equal(intersect, null);
+  await change(document.querySelector('.history-filters select'), '1');
+  assert.equal(document.querySelectorAll('.history-row').length, 20);
+  await navigate('#/dashboard');
+  await navigate('#/history');
+  assert.equal(document.querySelector('.history-filters select').value, '');
+  assert.equal(document.querySelectorAll('.history-row').length, 20);
+  delete globalThis.IntersectionObserver;
+});

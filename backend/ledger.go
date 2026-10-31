@@ -237,7 +237,7 @@ type History struct {
 }
 
 func (s *Store) history(ctx context.Context, f HistoryFilter) (History, error) {
-	out := History{Transactions: []Operation{}, Page: f.Page, PageSize: 30}
+	out := History{Transactions: []Operation{}, Page: f.Page, PageSize: 20}
 	if f.Page < 1 || f.Page > 1000000 || f.AccountID < 0 || f.CategoryID < 0 || (f.From != "" && !validDate(f.From)) || (f.To != "" && !validDate(f.To)) || (f.From != "" && f.To != "" && f.From > f.To) {
 		return out, invalid("Некорректные параметры истории.")
 	}

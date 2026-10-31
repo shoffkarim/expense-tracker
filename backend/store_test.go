@@ -445,7 +445,7 @@ func TestHistoryFilteringAndAPIValidation(t *testing.T) {
 		operation(t, s, OperationInput{Kind: "expense", Date: "2026-10-02", AmountMinor: 100, SourceAccountID: a, CategoryID: cat})
 	}
 	h, err := s.history(testContext, HistoryFilter{Page: 2, AccountID: a, CategoryID: cat, From: "2026-10-01", To: "2026-10-31"})
-	if err != nil || h.Total != 32 || len(h.Transactions) != 2 {
+	if err != nil || h.Total != 32 || len(h.Transactions) != 12 {
 		t.Fatal(h, err)
 	}
 	mux := http.NewServeMux()
