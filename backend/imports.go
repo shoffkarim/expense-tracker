@@ -171,7 +171,7 @@ func checkImport(ctx context.Context, tx *sql.Tx, in ImportInput) (ImportCheck, 
 					related = append(related, position)
 				}
 			}
-			check.Matches = append(check.Matches, ImportMatch{RelatedRows: related, Reason: "Похожие операции в этой выписке."})
+			check.Matches = append(check.Matches, ImportMatch{RelatedRows: related, Reason: "Похожие строки в этой выписке."})
 		}
 		check.MatchToken = digest([]any{in.AccountID, in.FileHash, rowKey(row), check.Matches})
 		out.Rows = append(out.Rows, check)

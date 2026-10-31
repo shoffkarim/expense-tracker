@@ -303,10 +303,10 @@ test('rules page creates a rule', async () => {
   await render(h(DraftHarness));
   await change(field('Счёт выписки'), '1');
   assert.deepEqual([...document.querySelectorAll('.import-number')].map(n => n.textContent), ['№1', '№2', '№3']);
-  assert.match(document.querySelector('.duplicate-note').textContent, /в этой выписке: №3/);
+  assert.match(document.querySelector('.duplicate-note').textContent, /Похожие строки в этой выписке: №3/);
   assert.match(document.querySelector('.duplicate-note').textContent, /в истории, ID 42/);
   await deleteRow(2);
   assert.deepEqual([...document.querySelectorAll('.import-number')].map(n => n.textContent), ['№1', '№3']);
-  assert.match(document.querySelector('.duplicate-note').textContent, /в этой выписке: №3/);
+  assert.match(document.querySelector('.duplicate-note').textContent, /Похожие строки в этой выписке: №3/);
   assert.ok(requests.filter(r => r.url === '/api/imports/check').every(r => r.body.rows.every(row => !('statementNumber' in row))));
  });
