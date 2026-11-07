@@ -13,6 +13,7 @@ import (
 )
 
 type ImportRow struct {
+	Tags []string `json:"tags,omitempty"`
 	Transaction
 	CategoryID     int64  `json:"categoryId,omitempty"`
 	OtherAccountID int64  `json:"otherAccountId,omitempty"`
@@ -189,7 +190,7 @@ func (s *Store) checkImport(ctx context.Context, in ImportInput) (ImportCheck, e
 }
 
 func importOperation(accountID int64, row ImportRow) (OperationInput, error) {
-	o := OperationInput{Date: row.Date, Description: row.Description, Comment: row.Comment, CategoryID: row.CategoryID, AmountMinor: row.AmountMinor}
+	o := OperationInput{Tags: row.Tags, Date: row.Date, Description: row.Description, Comment: row.Comment, CategoryID: row.CategoryID, AmountMinor: row.AmountMinor}
 	if row.AmountMinor == 0 {
 		return o, invalid("Операцию с нулевой суммой нужно пропустить.")
 	}

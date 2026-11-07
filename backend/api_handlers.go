@@ -51,6 +51,7 @@ func jsonResult(w http.ResponseWriter, value any, err error) {
 }
 func registerDataAPI(mux *http.ServeMux, s *Store) {
 	registerRulesAPI(mux, s)
+	mux.HandleFunc("GET /api/tags", func(w http.ResponseWriter, r *http.Request) { out, err := s.tags(r.Context()); jsonResult(w, out, err) })
 	mux.HandleFunc("GET /api/import-screen", func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.screen(r.Context(), true)
 		jsonResult(w, out, err)
@@ -123,7 +124,7 @@ func registerDataAPI(mux *http.ServeMux, s *Store) {
 			fail(w, 400, "Некорректные фильтры истории.")
 			return
 		}
-		out, err := s.history(r.Context(), HistoryFilter{AccountID: account, CategoryID: category, From: query.Get("from"), To: query.Get("to"), Page: int(page)})
+		out, err := s.history(r.Context(), HistoryFilter{AccountID: account, CategoryID: category, Tag: query.Get("tag"), From: query.Get("from"), To: query.Get("to"), Page: int(page)})
 		jsonResult(w, out, err)
 	})
 	mux.HandleFunc("POST /api/transactions", func(w http.ResponseWriter, r *http.Request) {

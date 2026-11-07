@@ -1,14 +1,14 @@
 export type Kind = 'expense' | 'income' | 'transfer';
 export type Transaction = { sourcePage: number; rowNumber: number; date: string; description: string; amountMinor: number };
 export type ParseWarning = { sourcePage: number; message: string };
-export type ParseStatementResponse = { transactions: (Transaction & { categoryId?: number; otherAccountId?: number; ruleName?: string })[]; warnings: ParseWarning[]; fileHash: string };
+export type ParseStatementResponse = { transactions: (Transaction & { tags?: string[]; categoryId?: number; otherAccountId?: number; ruleName?: string })[]; warnings: ParseWarning[]; fileHash: string };
 export type Account = { id: number; name: string; color: string; icon: string; initialBalanceMinor: number; balanceMinor: number; archived: boolean };
 export type Category = { id: number; kind: 'expense' | 'income'; name: string; color: string; icon: string; archived: boolean; amountMinor: number };
 export type Screen = { month: string; totalBalanceMinor: number; accounts: Account[]; categories: Category[] };
-export type OperationInput = { kind: Kind; date: string; amountMinor: number; sourceAccountId?: number; destinationAccountId?: number; categoryId?: number; description: string; comment: string };
+export type OperationInput = { tags?: string[]; kind: Kind; date: string; amountMinor: number; sourceAccountId?: number; destinationAccountId?: number; categoryId?: number; description: string; comment: string };
 export type Operation = OperationInput & { id: number; importId?: number; sourcePage?: number; rowNumber?: number };
 export type History = { transactions: Operation[]; total: number; page: number; pageSize: number };
-export type ImportRow = Transaction & { ruleName?: string; categoryId?: number; otherAccountId?: number; comment: string; decision: 'save' | 'skip' | 'keep'; matchToken?: string };
+export type ImportRow = Transaction & { ruleName?: string; tags?: string[]; categoryId?: number; otherAccountId?: number; comment: string; decision: 'save' | 'skip' | 'keep'; matchToken?: string };
 export type Draft = { id: string; fileName: string; fileHash: string; warnings: ParseWarning[]; rows: (ImportRow & { statementNumber: number })[] };
 export type ImportPayload = { accountId: number; fileHash: string; requestKey?: string; rows: ImportRow[] };
 export type ImportCheck = { alreadyImported: boolean; rows: { matches: { transactionId?: number; relatedRows?: { sourcePage: number; rowNumber: number }[]; reason: string }[]; matchToken: string }[] };

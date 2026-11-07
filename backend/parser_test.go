@@ -200,3 +200,44 @@ func TestMoneyLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestV2StandaloneSummary(t *testing.T) {
+	first := testV2Page(true,
+		testV2Cells(324, "26.10.2026", "26.10.2026", "+50.00 ₽", "+50.00 ₽", "Доход", "1234"),
+		testV2Cells(710, "25.10.2026", "25.10.2026", "-10.00 ₽", "-10.00 ₽", "Описание", "1234"),
+		testV2Cells(721, "12:00", "12:01", "", "", "продолжение"))
+	summary := page{Width: 595, Height: 842}
+	summary.Words = append(summary.Words, testV2Cells(21, "Пополнения:", "50.00 ₽")...)
+	summary.Words = append(summary.Words, testV2Cells(36, "Расходы:", "10.00 ₽")...)
+	summary.Words = append(summary.Words, testV2Cells(70, "С уважением,")...)
+	got, err := parseTestPages(t, first, summary)
+	want := []Transaction{
+		{SourcePage: 1, RowNumber: 1, Date: "2026-10-26", Description: "Доход", AmountMinor: 5000},
+		{SourcePage: 1, RowNumber: 2, Date: "2026-10-25", Description: "Описание продолжение", AmountMinor: -1000},
+	}
+	if err != nil || len(got.Warnings) != 0 || !reflect.DeepEqual(got.Transactions, want) {
+		t.Fatalf("unexpected synthetic summary parse: %+v, %v", got, err)
+	}
+	for _, name := range []string{"unknown", "incomplete", "invalid amount", "not last", "first page"} {
+		t.Run(name, func(t *testing.T) {
+			p := summary
+			p.Words = append([]word(nil), summary.Words...)
+			pages := []page{first, p}
+			switch name {
+			case "unknown":
+				p.Words[0].Text = "Неизвестно:"
+			case "incomplete":
+				pages[1].Words = p.Words[:2]
+			case "invalid amount":
+				p.Words[1].Text = "не сумма"
+			case "not last":
+				pages = append(pages, testV2Page(false))
+			case "first page":
+				pages = []page{p}
+			}
+			if _, err := parseTestPages(t, pages...); err == nil {
+				t.Fatal("unsupported summary accepted")
+			}
+		})
+	}
+}

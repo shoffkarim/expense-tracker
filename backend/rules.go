@@ -12,17 +12,34 @@ import (
 const rulesSchema = `CREATE TABLE rules(id INTEGER PRIMARY KEY, position INTEGER NOT NULL, payload TEXT NOT NULL);`
 
 type Rule struct {
-	ID             int64  `json:"id"`
-	Name           string `json:"name"`
-	AccountID      int64  `json:"accountId"`
-	Direction      string `json:"direction"`
-	Condition      string `json:"condition"`
-	Text           string `json:"text"`
-	Day            int    `json:"day"`
-	AmountMinor    int64  `json:"amountMinor"`
-	CategoryID     int64  `json:"categoryId"`
-	OtherAccountID int64  `json:"otherAccountId"`
-	Available      bool   `json:"available"`
+	Tags           []string `json:"tags,omitempty"`
+	ID             int64    `json:"id"`
+	Name           string   `json:"name"`
+	AccountID      int64    `json:"accountId"`
+	Direction      string   `json:"direction"`
+	Condition      string   `json:"condition"`
+	Text           string   `json:"text"`
+	Texts          []string `json:"texts"`
+	Day            int      `json:"day"`
+	AmountMinor    int64    `json:"amountMinor"`
+	CategoryID     int64    `json:"categoryId"`
+	OtherAccountID int64    `json:"otherAccountId"`
+	Available      bool     `json:"available"`
+}
+
+func (r Rule) textOptions() []string {
+	if r.Texts != nil {
+		return r.Texts
+	}
+	return []string{r.Text}
+}
+func (r *Rule) normalizeTexts() {
+	r.Texts = r.textOptions()
+	if len(r.Texts) > 0 {
+		r.Text = r.Texts[0]
+	} else {
+		r.Text = ""
+	}
 }
 
 func (s *Store) rules(ctx context.Context) ([]Rule, error) {
@@ -41,6 +58,7 @@ func (s *Store) rules(ctx context.Context) ([]Rule, error) {
 		if e = json.Unmarshal([]byte(data), &r); e != nil {
 			break
 		}
+		r.normalizeTexts()
 		r.ID = id
 		out = append(out, r)
 	}
@@ -57,13 +75,21 @@ func (s *Store) rules(ctx context.Context) ([]Rule, error) {
 	return out, nil
 }
 func (s *Store) validRule(ctx context.Context, r Rule) error {
+	if _, err := normalizeTags(r.Tags); err != nil {
+		return err
+	}
 	bad := &problem{400, "Проверьте название, условие и результат правила."}
 	if strings.TrimSpace(r.Name) == "" || len([]rune(r.Name)) > 80 || (r.Direction != "expense" && r.Direction != "income") {
 		return bad
 	}
 	if r.Condition == "text" {
-		if descriptionKey(r.Text) == "" || len([]rune(r.Text)) > 4000 {
+		if len(r.textOptions()) == 0 {
 			return bad
+		}
+		for _, text := range r.textOptions() {
+			if descriptionKey(text) == "" || len([]rune(text)) > 4000 {
+				return bad
+			}
 		}
 	} else if r.Condition != "day_amount" || r.Day < 1 || r.Day > 31 || r.AmountMinor <= 0 || r.AmountMinor > maxMoney {
 		return bad
@@ -75,14 +101,14 @@ func (s *Store) validRule(ctx context.Context, r Rule) error {
 	if r.AccountID < 0 || (r.AccountID != 0 && !active(r.AccountID)) {
 		return bad
 	}
-	if (r.CategoryID > 0) == (r.OtherAccountID > 0) || r.CategoryID < 0 || r.OtherAccountID < 0 {
+	if (r.CategoryID > 0 && r.OtherAccountID > 0) || (r.CategoryID == 0 && r.OtherAccountID == 0 && len(r.Tags) == 0) || r.CategoryID < 0 || r.OtherAccountID < 0 {
 		return bad
 	}
 	if r.OtherAccountID > 0 {
 		if !active(r.OtherAccountID) || r.OtherAccountID == r.AccountID {
 			return bad
 		}
-	} else {
+	} else if r.CategoryID > 0 {
 		var n int
 		if s.db.QueryRowContext(ctx, "SELECT count(*) FROM categories WHERE id=? AND archived=0 AND kind=?", r.CategoryID, r.Direction).Scan(&n) != nil || n != 1 {
 			return bad
@@ -98,7 +124,14 @@ func ruleMatches(r Rule, t Transaction, account int64) bool {
 		return false
 	}
 	if r.Condition == "text" {
-		return strings.Contains(descriptionKey(t.Description), descriptionKey(r.Text))
+		description := descriptionKey(t.Description)
+		for _, text := range r.textOptions() {
+			key := descriptionKey(text)
+			if key != "" && strings.Contains(description, key) {
+				return true
+			}
+		}
+		return false
 	}
 	amount := t.AmountMinor
 	if amount < 0 {
@@ -129,10 +162,16 @@ func registerRulesAPI(mux *http.ServeMux, s *Store) {
 			apiFailure(w, e)
 			return
 		}
+		in.normalizeTexts()
 		in.ID = 0
 		in.Available = false
-		data, _ := json.Marshal(in)
 		e := s.write(r.Context(), func(tx *sql.Tx) error {
+			var err error
+			in.Tags, err = saveTags(r.Context(), tx, in.Tags, 0)
+			if err != nil {
+				return err
+			}
+			data, _ := json.Marshal(in)
 			if id == 0 {
 				res, e := tx.Exec("INSERT INTO rules(position,payload) SELECT COALESCE(MAX(position),0)+1,? FROM rules", string(data))
 				if e != nil {
@@ -204,4 +243,26 @@ func registerRulesAPI(mux *http.ServeMux, s *Store) {
 		})
 		jsonResult(w, map[string]bool{"ok": true}, e)
 	})
+}
+
+func assignRules(rules []Rule, t Transaction, accountID int64) (categoryID, otherAccountID int64, tags []string, names string) {
+	tags = []string{}
+	for _, r := range rules {
+		if !ruleMatches(r, t, accountID) {
+			continue
+		}
+		if r.CategoryID > 0 || r.OtherAccountID > 0 {
+			if categoryID > 0 || otherAccountID > 0 {
+				continue
+			}
+			categoryID = r.CategoryID
+			otherAccountID = r.OtherAccountID
+		}
+		tags, _ = normalizeTags(append(tags, r.Tags...))
+		if names != "" {
+			names += ", "
+		}
+		names += r.Name
+	}
+	return
 }

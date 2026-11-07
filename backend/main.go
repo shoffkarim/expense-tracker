@@ -167,6 +167,7 @@ func parseHandler(poppler string, stores ...*Store) http.HandlerFunc {
 				return
 			}
 			type assigned struct {
+				Tags []string `json:"tags,omitempty"`
 				Transaction
 				CategoryID     int64  `json:"categoryId,omitempty"`
 				OtherAccountID int64  `json:"otherAccountId,omitempty"`
@@ -175,14 +176,7 @@ func parseHandler(poppler string, stores ...*Store) http.HandlerFunc {
 			rows := make([]assigned, len(result.Transactions))
 			for i, t := range result.Transactions {
 				rows[i].Transaction = t
-				for _, rule := range rules {
-					if ruleMatches(rule, t, id) {
-						rows[i].CategoryID = rule.CategoryID
-						rows[i].OtherAccountID = rule.OtherAccountID
-						rows[i].RuleName = rule.Name
-						break
-					}
-				}
+				rows[i].CategoryID, rows[i].OtherAccountID, rows[i].Tags, rows[i].RuleName = assignRules(rules, t, id)
 			}
 			reply(w, 200, struct {
 				Transactions []assigned     `json:"transactions"`

@@ -9,14 +9,15 @@ import (
 )
 
 type OperationInput struct {
-	Kind                 string `json:"kind"`
-	Date                 string `json:"date"`
-	AmountMinor          int64  `json:"amountMinor"`
-	SourceAccountID      int64  `json:"sourceAccountId,omitempty"`
-	DestinationAccountID int64  `json:"destinationAccountId,omitempty"`
-	CategoryID           int64  `json:"categoryId,omitempty"`
-	Description          string `json:"description"`
-	Comment              string `json:"comment"`
+	Tags                 []string `json:"tags,omitempty"`
+	Kind                 string   `json:"kind"`
+	Date                 string   `json:"date"`
+	AmountMinor          int64    `json:"amountMinor"`
+	SourceAccountID      int64    `json:"sourceAccountId,omitempty"`
+	DestinationAccountID int64    `json:"destinationAccountId,omitempty"`
+	CategoryID           int64    `json:"categoryId,omitempty"`
+	Description          string   `json:"description"`
+	Comment              string   `json:"comment"`
 }
 type Operation struct {
 	ID int64 `json:"id"`
@@ -42,6 +43,9 @@ func validDate(date string) bool {
 }
 
 func validateOperation(ctx context.Context, tx *sql.Tx, in OperationInput, old *Operation) error {
+	if _, err := normalizeTags(in.Tags); err != nil {
+		return err
+	}
 	if !validDate(in.Date) {
 		return invalid("Укажите дату в формате ГГГГ-ММ-ДД, начиная с 1900 года.")
 	}
@@ -183,7 +187,12 @@ func insertOperation(ctx context.Context, tx *sql.Tx, in OperationInput, importI
 	if err = applyOperation(ctx, tx, in, 1); err != nil {
 		return 0, err
 	}
-	return result.LastInsertId()
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	_, err = saveTags(ctx, tx, in.Tags, id)
+	return id, err
 }
 
 func (s *Store) saveOperation(ctx context.Context, id int64, in OperationInput) (int64, error) {
@@ -205,6 +214,12 @@ func (s *Store) saveOperation(ctx context.Context, id int64, in OperationInput) 
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE transactions SET kind=?,date=?,amount_minor=?,source_account_id=NULLIF(?,0),destination_account_id=NULLIF(?,0),category_id=NULLIF(?,0),description=?,comment=? WHERE id=?`,
 			in.Kind, in.Date, in.AmountMinor, in.SourceAccountID, in.DestinationAccountID, in.CategoryID, in.Description, in.Comment, id)
+		if err != nil {
+			return err
+		}
+		if in.Tags != nil {
+			_, err = saveTags(ctx, tx, in.Tags, id)
+		}
 		return err
 	})
 	return id, err
@@ -227,6 +242,7 @@ func (s *Store) deleteOperation(ctx context.Context, id int64) error {
 type HistoryFilter struct {
 	AccountID, CategoryID int64
 	From, To              string
+	Tag                   string
 	Page                  int
 }
 type History struct {
@@ -250,6 +266,10 @@ func (s *Store) history(ctx context.Context, f HistoryFilter) (History, error) {
 	if f.CategoryID != 0 {
 		where = append(where, "category_id=?")
 		args = append(args, f.CategoryID)
+	}
+	if f.Tag != "" {
+		where = append(where, "EXISTS (SELECT 1 FROM transaction_tags tt JOIN tags tg ON tg.id=tt.tag_id WHERE tt.transaction_id=transactions.id AND tg.key=?)")
+		args = append(args, descriptionKey(f.Tag))
 	}
 	if f.From != "" {
 		where = append(where, "date>=?")
@@ -277,7 +297,17 @@ func (s *Store) history(ctx context.Context, f HistoryFilter) (History, error) {
 			}
 			out.Transactions = append(out.Transactions, o)
 		}
-		return rows.Err()
+		if err = rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+		for i := range out.Transactions {
+			out.Transactions[i].Tags, err = operationTags(ctx, tx, out.Transactions[i].ID)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	return out, err
 }

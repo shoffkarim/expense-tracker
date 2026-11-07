@@ -1,3 +1,4 @@
+import { TagInput } from './Tags';
 import { useState, type FormEvent } from 'react';
 import { api, type Account, type Category, type Kind, type Operation, type OperationInput, type Screen } from './api';
 import { Appearance, ErrorNotice, Modal, message, money, moneyInput, parseMoneyInput, today } from './ui';
@@ -65,6 +66,7 @@ export function OperationForm({ operation, screen, onClose, onSaved }: FormProps
   const [destination, setDestination] = useState(operation?.destinationAccountId || 0);
   const [category, setCategory] = useState(operation?.categoryId || 0);
   const [description, setDescription] = useState(operation?.description || '');
+  const [tags, setTags] = useState<string[]>(operation?.tags || []);
   const [comment, setComment] = useState(operation?.comment || '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -78,7 +80,7 @@ export function OperationForm({ operation, screen, onClose, onSaved }: FormProps
     try {
       const amountMinor = parseMoneyInput(amount);
       if (amountMinor <= 0) throw new Error('Сумма должна быть больше нуля.');
-      const input: OperationInput = { kind, date, amountMinor, description, comment, ...(kind !== 'income' ? { sourceAccountId: source } : {}), ...(kind !== 'expense' ? { destinationAccountId: destination } : {}), ...(kind !== 'transfer' ? { categoryId: category } : {}) };
+      const input: OperationInput = { tags, kind, date, amountMinor, description, comment, ...(kind !== 'income' ? { sourceAccountId: source } : {}), ...(kind !== 'expense' ? { destinationAccountId: destination } : {}), ...(kind !== 'transfer' ? { categoryId: category } : {}) };
       await api(`/transactions${operation ? `/${operation.id}` : ''}`, operation ? 'PATCH' : 'POST', input);
       onSaved('Операция сохранена. Балансы и итоги обновлены.'); onClose();
     } catch (e) { setError(message(e)); } finally { setBusy(false); }
@@ -95,6 +97,7 @@ export function OperationForm({ operation, screen, onClose, onSaved }: FormProps
     {kind !== 'expense' && accountSelect('Куда', destination, setDestination, kind === 'transfer' ? source : undefined)}
     {kind !== 'transfer' && <label className="field">{kind === 'income' ? 'Источник дохода' : 'Категория расхода'}<select required value={category || ''} onChange={e => setCategory(Number(e.target.value))}><option value="">Выберите категорию</option>{categories.map(c => <option key={c.id} value={c.id}>{c.name}{c.archived ? ' · в архиве' : ''}</option>)}</select></label>}
     <label className="field">Описание<input maxLength={4000} value={description} onChange={e => setDescription(e.target.value)} /></label>
+    <TagInput value={tags} onChange={setTags} disabled={busy} />
     <label className="field">Комментарий<textarea maxLength={2000} rows={2} value={comment} onChange={e => setComment(e.target.value)} /></label>
     <ErrorNotice error={error} /><div className="form-actions">{operation && <button className="danger-button" type="button" onClick={() => void remove()}>Удалить</button>}<button type="submit" className="primary-button">{busy ? 'Сохраняем…' : 'Сохранить'}</button></div>
   </fieldset></form></Modal>;

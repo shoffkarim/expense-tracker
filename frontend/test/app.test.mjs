@@ -35,6 +35,7 @@ beforeEach(() => {
   globalThis.fetch = async (url, options = {}) => {
     const request = { url, ...options, body: typeof options.body === 'string' ? JSON.parse(options.body) : options.body };
     requests.push(request);
+    if (url === '/api/tags') return ok(['кофе', 'работа']);
     return respond(url, options, request);
   };
   root = createRoot(document.getElementById('root'));
@@ -347,4 +348,100 @@ test('history loads pages on intersection and resets filters on re-entry', async
   assert.equal(document.querySelector('.history-filters select').value, '');
   assert.equal(document.querySelectorAll('.history-row').length, 20);
   delete globalThis.IntersectionObserver;
+});
+
+test('dashboard links seed history filters and keep editing separate', async () => {
+  await render(h(App));
+  for (const [selector, param, value] of [
+    ['.account-card .card-link', 'accountId', '1'],
+    ['.category-card .card-link', 'categoryId', '1'],
+    ['[href="#/history?categoryId=2"]', 'categoryId', '2'],
+  ]) {
+    await navigate('#/dashboard');
+    const link = document.querySelector(selector);
+    assert.ok(link);
+    await navigate(link.getAttribute('href'));
+    const query = new URL(requests.filter(r => r.url.startsWith('/api/transactions?')).at(-1).url, window.location.origin).searchParams;
+    assert.equal(query.get(param), value);
+    assert.equal(query.get(param === 'accountId' ? 'categoryId' : 'accountId'), '');
+    assert.equal(query.get('from'), '');
+    assert.equal(query.get('to'), '');
+    assert.equal(query.get('page'), '1');
+    assert.equal(document.querySelectorAll('.history-filters select')[param === 'accountId' ? 0 : 1].value, value);
+  }
+  await navigate('#/history?accountId=2');
+  assert.equal(document.querySelector('.history-filters select').value, '2');
+  await navigate('#/history');
+  assert.equal(document.querySelector('.history-filters select').value, '');
+  await navigate('#/dashboard');
+  await click(document.querySelector('[aria-label="Редактировать счёт Карта"]'));
+  assert.ok(document.querySelector('dialog[open]'));
+  assert.equal(window.location.hash, '#/dashboard');
+});
+
+test('direct history link applies filter on first request', async () => {
+  window.location.hash = '#/history?categoryId=2';
+  await render(h(App));
+  const query = new URL(requests.find(r => r.url.startsWith('/api/transactions?')).url, window.location.origin).searchParams;
+  assert.equal(query.get('categoryId'), '2');
+  assert.equal(document.querySelectorAll('.history-filters select')[1].value, '2');
+});
+
+ test('rules support adding, removing and editing OR alternatives', async () => {
+  let rules = [{ id:1, name:'Food', direction:'expense', condition:'text', text:'WakefulOwl', amountMinor:0, categoryId:1, available:true }];
+  const previous=respond;
+  respond=async (url,options,request)=>{
+   if(url==='/api/rules'&&options.method==='GET')return ok(rules);
+   if(url==='/api/rules/1'&&options.method==='PATCH'){rules=[{...request.body,id:1}];return ok({id:1});}
+   return previous(url,options,request);
+  };
+  await render(h(App));await navigate('#/rules');await click(button('Изменить'));
+  assert.equal(field('Текст').value,'WakefulOwl');
+  assert.equal(field('Текст').checkValidity(),true);
+  await click(button('+')); assert.equal(buttons().some(b=>b.textContent==='+'),false);
+  await change(field('Текст 2'),'SAMOKAT');await click(button('+'));
+  await click(document.querySelector('[aria-label="Удалить текст 3"]'));
+  await submit();
+  assert.deepEqual(requests.find(r=>r.method==='PATCH').body.texts,['WakefulOwl','SAMOKAT']);
+  assert.match(document.querySelector('main').textContent,/Содержит «WakefulOwl» или «SAMOKAT»/);
+  await click(button('Изменить')); assert.equal(field('Текст 2').value,'SAMOKAT');
+ });
+
+ test('history month separators span pages and omit the current year', async () => {
+  let intersect;
+  globalThis.IntersectionObserver=class {constructor(cb){intersect=cb}observe(){}disconnect(){}};
+  const year=new Date().getFullYear();
+  respond=async url=>{
+   if(url==='/api/dashboard'||url==='/api/import-screen')return ok(base);
+   const page=Number(new URL(url,window.location.origin).searchParams.get('page'));
+   const dates=page===1?[`${year}-11-02`,`${year}-10-31`]:[`${year}-10-01`,`${year-1}-12-31`];
+   return ok({page,pageSize:2,total:4,transactions:dates.map((date,i)=>({id:page*2+i,date,kind:'expense',sourceAccountId:1,categoryId:1,amountMinor:100}))});
+  };
+  try {
+   await render(h(App));await navigate('#/history');
+   assert.deepEqual([...document.querySelectorAll('.history-month')].map(n=>n.textContent),['Октябрь']);
+   await act(async()=>intersect([{isIntersecting:true}]));
+   assert.deepEqual([...document.querySelectorAll('.history-month')].map(n=>n.textContent),['Октябрь',`Декабрь ${year-1}`]);
+   await change(document.querySelector('.history-filters select'),'1');
+   assert.deepEqual([...document.querySelectorAll('.history-month')].map(n=>n.textContent),['Октябрь']);
+  } finally {delete globalThis.IntersectionObserver;}
+ });
+
+test('tags support creation, deduplication, removal and operation saving', async () => {
+ await render(h(OperationForm, {screen:base,onClose(){},onSaved(){}}));
+ const input=document.querySelector('input[list]');
+ await change(input,'Кофе');await key(input,'Enter');
+ await change(input,'кофе');await key(input,'Enter');
+ assert.equal(document.querySelectorAll('.tag').length,1);
+ await change(input,'работа');await key(input,'Enter');
+ await click(document.querySelector('[aria-label="Убрать тег работа"]'));
+ await change(field('Сумма, ₽'),'10');await change(field('Откуда'),'1');await change(field('Категория расхода'),'1');
+ await submit();
+ assert.deepEqual(requests.find(r=>r.url==='/api/transactions'&&r.method==='POST').body.tags,['кофе']);
+});
+test('tag filter combines with account and category', async () => {
+ await render(h(App));await navigate('#/history');
+ await change(field('Тег'),'кофе');await change(field('Счёт'),'1');await change(field('Категория'),'1');
+ const query=new URL(requests.filter(r=>r.url.startsWith('/api/transactions?')).at(-1).url,'http://localhost').searchParams;
+ assert.equal(query.get('tag'),'кофе');assert.equal(query.get('accountId'),'1');assert.equal(query.get('categoryId'),'1');
 });

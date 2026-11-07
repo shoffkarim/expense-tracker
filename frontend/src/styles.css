@@ -293,3 +293,20 @@ fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
   .import-save-bar { flex-direction: column; align-items: stretch; padding: 16px; bottom: 6px; }
   .import-save-bar .primary-button { max-width: none; }
 }
+
+/* The card link covers the card; editing remains an independent control. */
+.account-card, .category-card { position: relative; }
+.card-link { color: inherit; text-decoration: none; }
+.card-link::after { content: ""; position: absolute; inset: 0; border-radius: 13px; }
+.card-link:focus-visible { outline: none; }
+.card-link:focus-visible::after { outline: 2px solid #658c73; outline-offset: 3px; }
+.card-edit { position: relative; z-index: 1; }
+.category-card:hover { border-color: #8ca18c; }
+
+.history-month { margin: 0; padding: 12px 20px; font-size: 14px; font-weight: 600; color: #576451; background: #f3f6ef; border-block: 1px solid #dde4d9; }
+.rule-texts { margin-bottom: 16px; }
+.rule-or { display: block; margin: 12px 0 6px; font-size: 12px; color: #576451; }
+
+.tag-labels { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 12px; background: #edf1e9; color: #405b47; font-size: 12px; overflow-wrap: anywhere; }
+.tag button { border: 0; background: transparent; padding: 0 3px; color: inherit; }

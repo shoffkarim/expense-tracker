@@ -1,3 +1,4 @@
+import { TagInput } from './Tags';
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { api, ApiError, parseStatement, type Draft, type ImportCheck, type ImportPayload, type ImportResult, type ImportRow, type Screen } from './api';
 import { AccountForm } from './Forms';
@@ -163,6 +164,7 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
                   const [type, id] = value.split(':');
                   updateRow(key, { ruleName: undefined, categoryId: type === 'category' ? Number(id) : undefined, otherAccountId: type === 'account' ? Number(id) : undefined });
                 }} /></div>
+              <TagInput label={`Теги операции ${number}`} value={row.tags} onChange={tags => updateRow(key, { tags })} disabled={locked || row.decision === 'skip'} />
               <input className="import-comment" aria-label={`Комментарий операции ${number}`} maxLength={2000} value={row.comment} disabled={locked || row.decision === 'skip'} placeholder="Комментарий" onChange={e => updateRow(key, { comment: e.target.value })} />
             </div>
             {row.amountMinor === 0 && <p className="import-zero-note">Нулевая сумма — операция не будет сохранена.</p>}

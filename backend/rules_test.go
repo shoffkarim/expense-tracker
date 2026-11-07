@@ -99,3 +99,44 @@ func TestRulesCRUDAndMigration(t *testing.T) {
 		t.Fatal("archived category")
 	}
 }
+
+func TestRuleTextAlternatives(t *testing.T) {
+	s, err := openStore(filepath.Join(t.TempDir(), "rules.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.db.Close()
+	r := Rule{Name: "Food", Available: true, Direction: "expense", Condition: "text", Text: "legacy", Texts: []string{"WakefulOwl", "  САМОКАТ   еда "}, CategoryID: categoryID(t, s, "expense")}
+	for _, description := range []string{"WAKEFULOWL payment", "оплата самокат еда"} {
+		if !ruleMatches(r, Transaction{Description: description, AmountMinor: -100}, 1) {
+			t.Fatal("OR mismatch")
+		}
+	}
+	if ruleMatches(r, Transaction{Description: "legacy", AmountMinor: -100}, 1) {
+		t.Fatal("texts must take precedence")
+	}
+	for _, texts := range [][]string{{}, {"shop", " "}, {strings.Repeat("я", 4001)}} {
+		invalid := r
+		invalid.Texts = texts
+		if s.validRule(testContext, invalid) == nil {
+			t.Fatal("invalid options accepted")
+		}
+	}
+	mux := http.NewServeMux()
+	registerRulesAPI(mux, s)
+	body, _ := json.Marshal(r)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/rules", strings.NewReader(string(body))))
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	rules, err := s.rules(testContext)
+	if err != nil || len(rules) != 1 || len(rules[0].Texts) != 2 || rules[0].Text != "WakefulOwl" {
+		t.Fatal("round trip", rules, err)
+	}
+	legacy := Rule{Text: "old"}
+	legacy.normalizeTexts()
+	if len(legacy.Texts) != 1 || legacy.Texts[0] != "old" {
+		t.Fatal("legacy")
+	}
+}

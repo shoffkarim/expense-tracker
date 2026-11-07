@@ -75,6 +75,22 @@ func v2HeaderEnd(lines []line) float64 {
 
 var datePatternV2 = regexp.MustCompile(`^\d{2}\.\d{2}\.\d{4}$`)
 
+func isStandaloneV2Summary(lines []line) bool {
+	if len(lines) < 2 {
+		return false
+	}
+	for i, label := range []string{"Пополнения:", "Расходы:"} {
+		c := columnsV2(lines[i])
+		if c[0] != label || c[2] != "" || c[3] != "" || c[4] != "" || c[5] != "" {
+			return false
+		}
+		if _, ok := parseMoney(c[1]); !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func parseDateV2(value string) (string, bool) {
 	if !datePatternV2.MatchString(value) {
 		return "", false
@@ -123,6 +139,11 @@ func parseStatementV2(pages []page) (ParseResult, error) {
 		lines := visualLines(p.Words)
 		headerY := v2HeaderEnd(lines)
 		if headerY < 0 {
+			if pi > 0 && pi == len(pages)-1 && isStandaloneV2Summary(lines) {
+				flush()
+				finished = true
+				continue
+			}
 			return result, errors.New("Шаблон выписки не поддерживается: не распознаны колонки таблицы.")
 		}
 		rowNumber := 0

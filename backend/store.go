@@ -73,17 +73,24 @@ func (s *Store) migrate() error {
 		if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 			return err
 		}
-		if version > 2 {
+		if version > 3 {
 			return errors.New("база создана более новой версией приложения")
 		}
-		if version == 2 {
+		if version == 3 {
 			return nil
+		}
+		if _, err := tx.Exec(tagsSchema); err != nil {
+			return err
+		}
+		if version == 2 {
+			_, err := tx.Exec("PRAGMA user_version = 3")
+			return err
 		}
 		if version == 1 {
 			if _, err := tx.Exec(rulesSchema); err != nil {
 				return err
 			}
-			_, err := tx.Exec("PRAGMA user_version = 2")
+			_, err := tx.Exec("PRAGMA user_version = 3")
 			return err
 		}
 		if _, err := tx.Exec(schema); err != nil {
@@ -108,7 +115,7 @@ func (s *Store) migrate() error {
 		if _, err := tx.Exec(rulesSchema); err != nil {
 			return err
 		}
-		_, err := tx.Exec("PRAGMA user_version = 2")
+		_, err := tx.Exec("PRAGMA user_version = 3")
 		return err
 	})
 }
