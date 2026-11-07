@@ -310,3 +310,8 @@ fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 .tag-labels { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 12px; background: #edf1e9; color: #405b47; font-size: 12px; overflow-wrap: anywhere; }
 .tag button { border: 0; background: transparent; padding: 0 3px; color: inherit; }
+
+.import-amount { margin-left: auto; display: flex; align-items: center; gap: 5px; }
+.import-amount input { width: 140px; max-width: 40vw; text-align: right; color: inherit; }
+.import-amount.income { color: #2e7851; }
+.import-amount.expense { color: #a24b39; }

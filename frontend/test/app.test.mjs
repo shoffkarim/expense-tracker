@@ -138,11 +138,14 @@ test('import survives navigation, requires categorization and duplicate decision
   await click(document.querySelector('[aria-label="Удалить операцию 2"]'));
   assert.equal(document.querySelectorAll('.import-row').length, 1);
   assert.ok(button('Сохранить операции'));
+  await change(document.querySelector('[aria-label="Сумма операции 1"]'), '99,25');
   await navigate('#/dashboard');
   await navigate('#/import');
+  assert.equal(document.querySelector('[aria-label="Сумма операции 1"]').value, '99,25');
   assert.equal(document.querySelector('[aria-label="Куда для операции 1"]').textContent, 'Еда');
   await click(button('Сохранить операции'));
   assert.ok(button('Повторить сохранение'));
+  assert.equal(document.querySelector('[aria-label="Сумма операции 1"]').disabled, true);
   assert.equal(document.querySelector('[aria-label="Куда для операции 1"]').disabled, true);
   assert.equal(document.querySelector('[aria-label="Удалить операцию 1"]').disabled, true);
   await click(button('Повторить сохранение'));
@@ -152,6 +155,7 @@ test('import survives navigation, requires categorization and duplicate decision
   assert.ok(saves[0].body.requestKey);
   assert.equal(saves[0].body.rows.length, 1);
   assert.equal(saves[0].body.rows[0].rowNumber, 1);
+  assert.equal(saves[0].body.rows[0].amountMinor, -9925);
   assert.equal(document.querySelector('[aria-label="Удалить операцию 1"]'), null);
   assert.equal(document.querySelectorAll('.import-row').length, 0);
   assert.match(document.querySelector('[role=status]').textContent, /Сохранено операций: 1/);
@@ -444,4 +448,56 @@ test('tag filter combines with account and category', async () => {
  await change(field('Тег'),'кофе');await change(field('Счёт'),'1');await change(field('Категория'),'1');
  const query=new URL(requests.filter(r=>r.url.startsWith('/api/transactions?')).at(-1).url,'http://localhost').searchParams;
  assert.equal(query.get('tag'),'кофе');assert.equal(query.get('accountId'),'1');assert.equal(query.get('categoryId'),'1');
+});
+
+
+test('import amount edits preserve direction, validate input and send only API fields', async () => {
+  mockImportChecks(cleanCheck);
+  await render(h(DraftHarness));
+  await change(field('Счёт выписки'), '1');
+  const amount = document.querySelector('[aria-label="Сумма операции 1"]');
+  assert.equal(amount.value, '1.00');
+  for (const invalid of ['', '0', '-2', '1.234', '90071992547410']) {
+    await change(amount, invalid);
+    assert.equal(amount.getAttribute('aria-invalid'), 'true');
+    assert.ok(!buttons().some(b => b.textContent === 'Сохранить операции'));
+  }
+  await change(amount, '12,34');
+  assert.equal(amount.getAttribute('aria-invalid'), 'false');
+  const checked = requests.filter(r => r.url === '/api/imports/check').at(-1).body.rows[0];
+  assert.equal(checked.amountMinor, -1234);
+  assert.ok(!('amountText' in checked));
+  assert.ok(!('amountError' in checked));
+  await click(button('Сохранить операции'));
+  assert.equal(requests.find(r => r.url === '/api/imports').body.rows[0].amountMinor, -1234);
+});
+
+test('import income amount stays positive and original zero stays skipped', async () => {
+  mockImportChecks(cleanCheck);
+  await render(h(DraftHarness, { rows: [
+    { ...syntheticRows()[0], amountMinor: 100, categoryId: 2 },
+    { ...syntheticRows()[1], amountMinor: 0, decision: 'skip' },
+  ] }));
+  await change(field('Счёт выписки'), '1');
+  assert.equal(document.querySelector('[aria-label="Сумма операции 2"]').disabled, true);
+  await change(document.querySelector('[aria-label="Сумма операции 1"]'), '2.55');
+  await click(button('Сохранить операции'));
+  assert.equal(requests.find(r => r.url === '/api/imports').body.rows[0].amountMinor, 255);
+});
+
+test('late duplicate check cannot authorize an edited amount', async () => {
+  let oldResponse;
+  mockImportChecks(request => request.body.rows[0].amountMinor === -100
+    ? new Promise(resolve => { oldResponse = () => resolve(cleanCheck(request)); })
+    : ok({ alreadyImported: false, rows: request.body.rows.map(row => ({ matches: [{ transactionId: 42, reason: 'Synthetic match' }], matchToken: `changed-${row.amountMinor}` })) }));
+  await render(h(DraftHarness, { rows: [syntheticRows()[0]] }));
+  await change(field('Счёт выписки'), '1');
+  await change(document.querySelector('[aria-label="Сумма операции 1"]'), '2');
+  await act(async () => oldResponse());
+  assert.ok(document.querySelector('.duplicate-note'));
+  assert.ok(!buttons().some(b => b.textContent === 'Сохранить операции'));
+  await click(document.querySelector('.duplicate-confirm input'));
+  await change(document.querySelector('[aria-label="Сумма операции 1"]'), '3');
+  assert.equal(document.querySelector('.duplicate-confirm input').checked, false);
+  assert.ok(!buttons().some(b => b.textContent === 'Сохранить операции'));
 });

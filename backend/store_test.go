@@ -485,3 +485,35 @@ func TestHistoryFilteringAndAPIValidation(t *testing.T) {
 		t.Fatal(out.Code)
 	}
 }
+
+func TestImportEditedAmount(t *testing.T) {
+	for _, transfer := range []bool{false, true} {
+		s := testStore(t)
+		a := account(t, s, "Synthetic source", 10000)
+		b := account(t, s, "Synthetic destination", 0)
+		cat := categoryID(t, s, "expense")
+		in := importInput(a, cat, "edited")
+		if transfer {
+			in.Rows[0].CategoryID = 0
+			in.Rows[0].OtherAccountID = b
+		}
+		if _, err := s.checkImport(testContext, in); err != nil {
+			t.Fatal(err)
+		}
+		in.Rows[0].AmountMinor = -1234
+		if _, err := s.saveImport(testContext, in); err != nil {
+			t.Fatal(err)
+		}
+		balance(t, s, a, 8766)
+		if transfer {
+			balance(t, s, b, 1234)
+			total(t, s, cat, "2026-10", 0)
+		} else {
+			total(t, s, cat, "2026-10", 1234)
+		}
+		history, err := s.history(testContext, HistoryFilter{Page: 1})
+		if err != nil || len(history.Transactions) != 1 || history.Transactions[0].AmountMinor != 1234 {
+			t.Fatal(history, err)
+		}
+	}
+}

@@ -3,10 +3,10 @@ import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 
 import { api, ApiError, parseStatement, type Draft, type ImportCheck, type ImportPayload, type ImportResult, type ImportRow, type Screen } from './api';
 import { AccountForm } from './Forms';
 import { ImportPicker } from './ImportPicker';
-import { ErrorNotice, Icon, dateLabel, message, money } from './ui';
+import { ErrorNotice, Icon, dateLabel, message, moneyInput, parseMoneyInput } from './ui';
 
 const rowKey = (row: Pick<ImportRow, 'sourcePage' | 'rowNumber'>) => `${row.sourcePage}:${row.rowNumber}`;
-const rowSetKey = (draft: Draft | null) => draft ? `${draft.id}/${draft.rows.map(rowKey).join(',')}` : '';
+const rowSetKey = (draft: Draft | null) => draft ? `${draft.id}/${draft.rows.map(row => `${rowKey(row)}:${row.amountMinor}:${row.amountError || ''}`).join(',')}` : '';
 type CheckedRows = { key: string; alreadyImported: boolean; rows: Record<string, ImportCheck['rows'][number]> };
 
 type Props = { draft: Draft | null; setDraft: Dispatch<SetStateAction<Draft | null>>; active: boolean; revision: number; onChanged: (notice: string) => void };
@@ -44,10 +44,10 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
 
   useEffect(() => {
     const currentDraft = draftRef.current;
-    if (!active || !currentDraft || !currentDraft.rows.length || !accountId || pendingSubmission) { setCheck(null); setChecking(false); setCheckError(''); return; }
+    if (!active || !currentDraft || !currentDraft.rows.length || !accountId || pendingSubmission || currentDraft.rows.some(row => row.amountError)) { setCheck(null); setChecking(false); setCheckError(''); return; }
     const controller = new AbortController();
     setChecking(true); setCheck(null); setCheckError('');
-    api<ImportCheck>('/imports/check', 'POST', { accountId, fileHash: currentDraft.fileHash, rows: currentDraft.rows.map(({ ruleName: _ruleName, statementNumber: _statementNumber, ...row }) => row) }, controller.signal)
+    api<ImportCheck>('/imports/check', 'POST', { accountId, fileHash: currentDraft.fileHash, rows: currentDraft.rows.map(({ ruleName: _ruleName, statementNumber: _statementNumber, amountText: _amountText, amountError: _amountError, ...row }) => row) }, controller.signal)
       .then(result => {
         if (controller.signal.aborted || rowSetKey(draftRef.current) !== rowsKey) return;
         const rows = Object.fromEntries(currentDraft.rows.map((row, i) => [rowKey(row), result.rows[i]]));
@@ -78,6 +78,24 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
     } catch (e) { setError(message(e)); } finally { setLoading(false); busyRef.current = false; }
   }
   function updateRow(key: string, patch: Partial<ImportRow>) { setDraft(current => current ? { ...current, rows: current.rows.map(row => rowKey(row) === key ? { ...row, ...patch } : row) } : null); }
+  function updateAmount(key: string, text: string) {
+    if (locked || busyRef.current) return;
+    setDraft(current => current ? { ...current, rows: current.rows.map(row => {
+      if (rowKey(row) !== key || row.amountMinor === 0) return row;
+      let amountMinor = row.amountMinor;
+      let amountError = '';
+      try {
+        const value = parseMoneyInput(text);
+        if (value === 0) throw new Error('Сумма должна быть больше нуля.');
+        amountMinor = row.amountMinor < 0 ? -value : value;
+      } catch (e) { amountError = message(e); }
+      return { ...row, amountText: text, amountError, amountMinor,
+        ...(amountMinor !== row.amountMinor || amountError !== (row.amountError || '') ? {
+          ruleName: undefined, matchToken: undefined,
+          decision: row.decision === 'keep' ? 'save' as const : row.decision
+        } : {}) };
+    }) } : null);
+  }
   function removeRow(key: string) {
     if (locked || busyRef.current) return;
     setCheck(null); setCheckError('');
@@ -93,6 +111,7 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
   }
   const rowReady = (row: ImportRow) => {
     if (row.decision === 'skip') return true;
+    if ('amountError' in row && row.amountError) return false;
     const validCategory = screen?.categories.some(c => c.id === row.categoryId && c.kind === (row.amountMinor < 0 ? 'expense' : 'income'));
     const validAccount = row.otherAccountId !== accountId && screen?.accounts.some(a => a.id === row.otherAccountId);
     return row.amountMinor !== 0 && (validCategory || validAccount) && (!currentCheck?.rows[rowKey(row)]?.matches.length || row.decision === 'keep');
@@ -102,7 +121,7 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
   const ready = !!draft?.rows.length && kept > 0 && readyCount === draft.rows.length && !!currentCheck && !currentCheck.alreadyImported && !checking && !!screen && !dataError;
   async function save() {
     if (busyRef.current || (!ready && !pendingSubmission) || !draft) return;
-    const payload = pendingSubmission || { accountId, fileHash: draft.fileHash, rows: draft.rows.map(({ ruleName: _ruleName, statementNumber: _statementNumber, ...row }) => row), requestKey: crypto.randomUUID() };
+    const payload = pendingSubmission || { accountId, fileHash: draft.fileHash, rows: draft.rows.map(({ ruleName: _ruleName, statementNumber: _statementNumber, amountText: _amountText, amountError: _amountError, ...row }) => row), requestKey: crypto.randomUUID() };
     busyRef.current = true; setSaving(true); setError(''); setPendingSubmission(payload);
     try {
       const result = await api<ImportResult>('/imports', 'POST', payload);
@@ -148,11 +167,20 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
             : row.otherAccountId !== accountId && screen?.accounts.some(a => a.id === row.otherAccountId);
           const direction = row.amountMinor < 0 ? 'Куда' : 'Откуда';
           return <article key={key} className={`import-row${hasDestination && row.decision !== 'skip' ? ' is-categorized' : ''}`}>
-            <div className="import-row-top"><span className="import-number">№{number}</span><time dateTime={row.date}>{dateLabel(row.date)}</time><strong className={row.amountMinor > 0 ? 'income' : 'expense'}>{row.amountMinor > 0 ? '+' : ''}{money(row.amountMinor)}</strong>
+            <div className="import-row-top"><span className="import-number">№{number}</span><time dateTime={row.date}>{dateLabel(row.date)}</time><label className={`import-amount ${row.amountMinor > 0 ? 'income' : 'expense'}`}>
+                <span aria-hidden="true">{row.amountMinor < 0 ? '−' : '+'}</span>
+                <input type="text" inputMode="decimal" aria-label={`Сумма операции ${number}`}
+                  aria-invalid={!!row.amountError} aria-describedby={row.amountError ? `amount-error-${key}` : undefined}
+                  value={row.amountText ?? moneyInput(Math.abs(row.amountMinor))}
+                  disabled={locked || row.amountMinor === 0}
+                  onChange={e => updateAmount(key, e.target.value)} />
+                <span>₽</span>
+              </label>
               <button type="button" className="import-delete" disabled={locked} aria-label={`Удалить операцию ${number}`} title="Удалить из списка" onClick={() => removeRow(key)}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" /></svg>
               </button>
             </div>
+            {row.amountError && <p className="error-panel" role="alert" id={`amount-error-${key}`}>{row.amountError}</p>}
             <p className="import-description">{row.description}</p>{row.ruleName && <p className="muted">Правило: {row.ruleName}</p>}
             <div className="import-row-fields">
               <div className="import-direction"><span>{direction}</span><ImportPicker label={`${direction} для операции ${number}`} value={selected} disabled={locked || !active || row.decision === 'skip' || !accountId}
