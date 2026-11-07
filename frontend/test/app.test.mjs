@@ -2,7 +2,7 @@ import { test, beforeEach, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost:8080/#/dashboard' });
-for (const key of ['window', 'document', 'HTMLElement', 'HTMLInputElement', 'HTMLSelectElement', 'HTMLDialogElement', 'Event', 'MouseEvent', 'DOMException', 'FormData', 'File']) globalThis[key] = dom.window[key];
+for (const key of ['window', 'document', 'Element', 'Node', 'Document', 'MutationObserver', 'AbortController', 'AbortSignal', 'getComputedStyle', 'HTMLElement', 'HTMLInputElement', 'HTMLSelectElement', 'HTMLDialogElement', 'Event', 'MouseEvent', 'DOMException', 'FormData', 'File']) globalThis[key] = dom.window[key];
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator });
 HTMLDialogElement.prototype.showModal = function () { this.open = true; };
 HTMLDialogElement.prototype.close = function () { this.open = false; };
@@ -607,4 +607,15 @@ test('money input cleanup preserves caret and supports clearing', () => {
   assert.equal(cleanMoneyInput(input), '');
   input.value = '-1-2,34';
   assert.equal(cleanMoneyInput(input, true), '-12.34');
+});
+
+test('dashboard positions affect cards but preserve account choices', async () => {
+  respond = async url => url === '/api/dashboard' || url === '/api/import-screen'
+    ? ok({...base, accounts: base.accounts.map((a,i)=>({...a,dashboardPosition:1-i}))})
+    : ok({transactions:[],total:0,page:1,pageSize:20});
+  await render(h(App));
+  assert.deepEqual([...document.querySelectorAll('.account-grid .card-name')].map(el=>el.textContent), ['Наличные','Карта']);
+  await click(button('+ Добавить операцию'));
+  const choices = [...document.querySelectorAll('select option')].map(el=>el.textContent);
+  assert.ok(choices.indexOf('Карта') < choices.indexOf('Наличные'));
 });

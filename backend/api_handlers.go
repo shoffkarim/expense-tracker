@@ -51,6 +51,7 @@ func jsonResult(w http.ResponseWriter, value any, err error) {
 }
 func registerDataAPI(mux *http.ServeMux, s *Store) {
 	registerRulesAPI(mux, s)
+	registerOrderAPI(mux, s)
 	mux.HandleFunc("GET /api/tags", func(w http.ResponseWriter, r *http.Request) { out, err := s.tags(r.Context()); jsonResult(w, out, err) })
 	mux.HandleFunc("GET /api/import-screen", func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.screen(r.Context(), true)

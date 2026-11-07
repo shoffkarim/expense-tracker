@@ -73,11 +73,15 @@ func (s *Store) migrate() error {
 		if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 			return err
 		}
-		if version > 4 {
+		if version > 5 {
 			return errors.New("база создана более новой версией приложения")
 		}
-		if version == 4 {
+		if version == 5 {
 			return nil
+		}
+		if version == 4 {
+			_, err := tx.Exec(`ALTER TABLE accounts ADD COLUMN dashboard_position INTEGER NOT NULL DEFAULT 0; ALTER TABLE categories ADD COLUMN dashboard_position INTEGER NOT NULL DEFAULT 0; UPDATE accounts SET dashboard_position=id; UPDATE categories SET dashboard_position=id; CREATE TRIGGER accounts_position AFTER INSERT ON accounts BEGIN UPDATE accounts SET dashboard_position=(SELECT COALESCE(MAX(dashboard_position),0)+1 FROM accounts) WHERE id=NEW.id; END; CREATE TRIGGER categories_position AFTER INSERT ON categories BEGIN UPDATE categories SET dashboard_position=(SELECT COALESCE(MAX(dashboard_position),0)+1 FROM categories WHERE kind=NEW.kind) WHERE id=NEW.id; END; PRAGMA user_version=5;`)
+			return err
 		}
 		if version == 3 {
 			_, err := tx.Exec("ALTER TABLE import_rows RENAME TO import_rows_old; DROP INDEX import_rows_match; CREATE TABLE import_rows (import_id INTEGER NOT NULL REFERENCES imports(id), source_page INTEGER NOT NULL, row_number INTEGER NOT NULL, date TEXT NOT NULL, amount_minor INTEGER NOT NULL, description_key TEXT NOT NULL, transaction_id INTEGER NOT NULL REFERENCES transactions(id), part_index INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(import_id,source_page,row_number,part_index)); INSERT INTO import_rows SELECT import_id,source_page,row_number,date,amount_minor,description_key,transaction_id,0 FROM import_rows_old; DROP TABLE import_rows_old; CREATE INDEX import_rows_match ON import_rows(date,amount_minor,description_key); PRAGMA user_version=4")
@@ -129,7 +133,7 @@ func (s *Store) migrate() error {
 	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version < 4 {
+	if version < 5 {
 		return s.migrate()
 	}
 	return nil
@@ -148,6 +152,7 @@ func (s *Store) write(ctx context.Context, fn func(*sql.Tx) error) error {
 }
 
 type Account struct {
+	DashboardPosition   int64  `json:"dashboardPosition"`
 	ID                  int64  `json:"id"`
 	Name                string `json:"name"`
 	Color               string `json:"color"`
@@ -163,13 +168,14 @@ type AccountInput struct {
 	BalanceMinor int64  `json:"balanceMinor"`
 }
 type Category struct {
-	ID          int64  `json:"id"`
-	Kind        string `json:"kind"`
-	Name        string `json:"name"`
-	Color       string `json:"color"`
-	Icon        string `json:"icon"`
-	Archived    bool   `json:"archived"`
-	AmountMinor int64  `json:"amountMinor"`
+	DashboardPosition int64  `json:"dashboardPosition"`
+	ID                int64  `json:"id"`
+	Kind              string `json:"kind"`
+	Name              string `json:"name"`
+	Color             string `json:"color"`
+	Icon              string `json:"icon"`
+	Archived          bool   `json:"archived"`
+	AmountMinor       int64  `json:"amountMinor"`
 }
 type CategoryInput struct {
 	Kind  string `json:"kind"`
@@ -200,13 +206,13 @@ func validAppearance(name, color, icon string) error {
 func (s *Store) screen(ctx context.Context, activeOnly bool) (Screen, error) {
 	out := Screen{Month: s.now().Format("2006-01"), Accounts: []Account{}, Categories: []Category{}}
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, "SELECT id,name,color,icon,initial_balance_minor,balance_minor,archived FROM accounts ORDER BY archived,id")
+		rows, err := tx.QueryContext(ctx, "SELECT id,name,color,icon,initial_balance_minor,balance_minor,archived,dashboard_position FROM accounts ORDER BY archived,id")
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
 			var a Account
-			if err = rows.Scan(&a.ID, &a.Name, &a.Color, &a.Icon, &a.InitialBalanceMinor, &a.BalanceMinor, &a.Archived); err != nil {
+			if err = rows.Scan(&a.ID, &a.Name, &a.Color, &a.Icon, &a.InitialBalanceMinor, &a.BalanceMinor, &a.Archived, &a.DashboardPosition); err != nil {
 				rows.Close()
 				return err
 			}
@@ -226,7 +232,7 @@ func (s *Store) screen(ctx context.Context, activeOnly bool) (Screen, error) {
 		if err != nil {
 			return err
 		}
-		rows, err = tx.QueryContext(ctx, `SELECT c.id,c.kind,c.name,c.color,c.icon,c.archived,COALESCE(m.amount_minor,0)
+		rows, err = tx.QueryContext(ctx, `SELECT c.id,c.kind,c.name,c.color,c.icon,c.archived,COALESCE(m.amount_minor,0),c.dashboard_position
 			FROM categories c LEFT JOIN category_months m ON m.category_id=c.id AND m.month=? ORDER BY c.archived,c.id`, out.Month)
 		if err != nil {
 			return err
@@ -234,7 +240,7 @@ func (s *Store) screen(ctx context.Context, activeOnly bool) (Screen, error) {
 		defer rows.Close()
 		for rows.Next() {
 			var c Category
-			if err = rows.Scan(&c.ID, &c.Kind, &c.Name, &c.Color, &c.Icon, &c.Archived, &c.AmountMinor); err != nil {
+			if err = rows.Scan(&c.ID, &c.Kind, &c.Name, &c.Color, &c.Icon, &c.Archived, &c.AmountMinor, &c.DashboardPosition); err != nil {
 				return err
 			}
 			if !activeOnly || !c.Archived {

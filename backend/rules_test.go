@@ -57,7 +57,7 @@ func TestRulesCRUDAndMigration(t *testing.T) {
 	}
 	a := account(t, s, "Synthetic", 0)
 	c := categoryID(t, s, "expense")
-	if _, e = s.db.Exec("DROP TABLE rules; PRAGMA user_version=1"); e != nil {
+	if _, e = s.db.Exec("DROP TRIGGER accounts_position; DROP TRIGGER categories_position; ALTER TABLE accounts DROP COLUMN dashboard_position; ALTER TABLE categories DROP COLUMN dashboard_position; DROP TABLE rules; PRAGMA user_version=1"); e != nil {
 		t.Fatal(e)
 	}
 	if e = s.migrate(); e != nil {
