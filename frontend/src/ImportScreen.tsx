@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode, type Dispatch, type SetSta
 import { api, ApiError, parseStatement, type Draft, type ImportCheck, type ImportPayload, type ImportResult, type ImportRow, type Screen } from './api';
 import { AccountForm } from './Forms';
 import { ImportPicker } from './ImportPicker';
-import { ErrorNotice, Icon, dateLabel, message, moneyInput, parseMoneyInput } from './ui';
+import { ErrorNotice, Icon, dateLabel, message, moneyInput, cleanMoneyInput, parseMoneyInput } from './ui';
 
 const rowKey = (row: Pick<ImportRow, 'sourcePage' | 'rowNumber' | 'localId'>) => `${row.sourcePage}:${row.rowNumber}${row.localId || ""}`;
 const rowSetKey = (draft: Draft | null) => draft ? `${draft.id}/${draft.rows.map(row => `${rowKey(row)}:${row.amountMinor}:${row.amountError || ''}:${JSON.stringify(row.parts)}`).join(',')}` : '';
@@ -89,7 +89,7 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
   function updateAmount(key: string, text: string) {
     if (locked || busyRef.current) return;
     const row = draft?.rows.flatMap(r => r.parts || [r]).find(r => rowKey(r) === key);
-    if (!row) return;
+    if (!row || text === (row.amountText ?? moneyInput(Math.abs(row.amountMinor)))) return;
     try { const value = parseMoneyInput(text); if (!value) throw new Error('Сумма должна быть больше нуля.'); updateRow(key, { amountText: text, amountError: '', amountMinor: row.amountMinor < 0 ? -value : value, matchToken: undefined, decision: 'save' }); }
     catch(e) { updateRow(key, {amountText: text, amountError: message(e)}); }
   }
@@ -155,7 +155,7 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
                   aria-invalid={!!row.amountError} aria-describedby={row.amountError ? `amount-error-${key}` : undefined}
                   value={row.amountText ?? moneyInput(Math.abs(row.amountMinor))}
                   disabled={locked || row.amountMinor === 0 || !!row.parts}
-                  onChange={e => updateAmount(key, e.target.value)} />
+                  onChange={e => updateAmount(key, cleanMoneyInput(e.target))} />
                 <span>₽</span>
               </label>
               {!row.localId && row.amountMinor !== 0 && <button type="button" className="import-icon-button" disabled={locked}

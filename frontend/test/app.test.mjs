@@ -13,7 +13,7 @@ const { App } = await import('../src/App.tsx');
 const { ImportScreen } = await import('../src/ImportScreen.tsx');
 const { ImportPicker } = await import('../src/ImportPicker.tsx');
 const { OperationForm, AccountForm } = await import('../src/Forms.tsx');
-const { parseMoneyInput, moneyInput, money } = await import('../src/ui.tsx');
+const { parseMoneyInput, moneyInput, money, cleanMoneyInput } = await import('../src/ui.tsx');
 const base = {
   month: '2026-10', totalBalanceMinor: 100000,
   accounts: [{ id: 1, name: 'Карта', color: '#658c73', icon: 'card', balanceMinor: 100000, initialBalanceMinor: 100000, archived: false }, { id: 2, name: 'Наличные', color: '#627eaa', icon: 'cash', balanceMinor: 0, initialBalanceMinor: 0, archived: false }],
@@ -79,7 +79,8 @@ test('decimal inputs use integer kopecks and reject rounding or unsafe values', 
 test('account creation and manual balance editing use minor units', async () => {
   let saved = false;
   await render(h(AccountForm, { account: base.accounts[0], onClose() {}, onSaved() { saved = true; } }));
-  await change(field('Текущий баланс, ₽'), '-123,45');
+  await change(field('Текущий баланс, ₽'), '-123abc,45₽');
+  assert.equal(field('Текущий баланс, ₽').value, '-123.45');
   await submit();
   const request = requests.find(r => r.url === '/api/accounts/1');
   assert.equal(request.method, 'PATCH');
@@ -90,7 +91,11 @@ test('account creation and manual balance editing use minor units', async () => 
 test('manual income sends the receiving account and income category', async () => {
   await render(h(OperationForm, { screen: base, onClose() {}, onSaved() {} }));
   await change(field('Тип операции'), 'income');
-  await change(field('Сумма, ₽'), '2500,01');
+  await change(field('Сумма, ₽'), '2а500 ₽,01');
+  assert.equal(field('Сумма, ₽').value, '2500.01');
+  await change(field('Сумма, ₽'), '2500.01xyz');
+  assert.equal(field('Сумма, ₽').value, '2500.01');
+  assert.equal(document.querySelector('[role=alert]'), null);
   await change(field('Куда'), '1');
   await change(field('Источник дохода'), '2');
   await submit();
@@ -141,7 +146,7 @@ test('import survives navigation, requires categorization and duplicate decision
   await change(document.querySelector('[aria-label="Сумма операции 1"]'), '99,25');
   await navigate('#/dashboard');
   await navigate('#/import');
-  assert.equal(document.querySelector('[aria-label="Сумма операции 1"]').value, '99,25');
+  assert.equal(document.querySelector('[aria-label="Сумма операции 1"]').value, '99.25');
   assert.equal(document.querySelector('[aria-label="Куда для операции 1"]').textContent, 'Еда');
   await click(button('Сохранить операции'));
   assert.ok(button('Повторить сохранение'));
@@ -287,19 +292,49 @@ test('picker supports selection, changing selection, keyboard, outside clicks an
   assert.equal(document.querySelector('[role=listbox]'), null);
 });
 
-test('rules page creates a rule', async () => {
+test('rules modal creates and edits a rule, preserves failed input and resets on cancel', async () => {
   const previous = respond; let rules = [];
   respond = async (url, options, request) => {
     if (url === '/api/rules' && options.method === 'GET') return ok(rules);
+    if (url === '/api/rules/1' && options.method === 'PATCH') { rules = [{ ...request.body }]; return ok({ id: 1 }); }
     if (url === '/api/rules' && options.method === 'POST') { rules = [{ ...request.body, id: 1, available: true }]; return ok({ id: 1 }); }
     return previous(url, options, request);
   };
   await render(h(App)); await navigate('#/rules'); await click(button('Добавить правило'));
+  assert.ok(document.querySelector('dialog[open] form'));
   await change(field('Название'), 'Магазин'); await change(field('Текст'), 'shop'); await change(field('Результат'), 'c:1');
   await act(async () => document.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
   const request = requests.find(r => r.url === '/api/rules' && r.method === 'POST');
   assert.equal(request.body.text, 'shop'); assert.equal(request.body.categoryId, 1);
   assert.match(document.querySelector('main').textContent, /Содержит «shop»/);
+  assert.equal(document.querySelector('dialog'), null);
+  await click(button('Изменить'));
+  assert.equal(field('Название').value, 'Магазин');
+  await change(field('Название'), 'Новое название');
+  const success = respond;
+  let finish;
+  respond = async (url, options, request) => options.method === 'PATCH'
+    ? new Promise(resolve => { finish = resolve; }) : success(url, options, request);
+  await act(async () => document.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+  assert.equal(document.querySelector('fieldset').disabled, true);
+  assert.equal(document.querySelector('[aria-label="Закрыть"]').disabled, true);
+  await act(async () => document.querySelector('dialog').dispatchEvent(new Event('cancel', { cancelable: true })));
+  assert.ok(document.querySelector('dialog[open]'));
+  await act(async () => finish({ ok: false, status: 400, json: async () => ({ error: 'Ошибка сохранения' }) }));
+  assert.ok(document.querySelector('dialog [role="alert"]'));
+  assert.equal(field('Название').value, 'Новое название');
+  respond = success;
+  await act(async () => document.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+  assert.equal(document.querySelector('dialog'), null);
+  assert.equal(rules[0].name, 'Новое название');
+  await click(button('Добавить правило'));
+  await change(field('Название'), 'Черновик');
+  await click(button('Отмена'));
+  await click(button('Добавить правило'));
+  assert.equal(field('Название').value, '');
+  await act(async () => document.querySelector('dialog').dispatchEvent(new Event('cancel', { cancelable: true })));
+  assert.equal(document.querySelector('dialog'), null);
+
 });
 
  test('duplicate messages distinguish statement numbers and history IDs', async () => {
@@ -457,11 +492,18 @@ test('import amount edits preserve direction, validate input and send only API f
   await change(field('Счёт выписки'), '1');
   const amount = document.querySelector('[aria-label="Сумма операции 1"]');
   assert.equal(amount.value, '1.00');
-  for (const invalid of ['', '0', '-2', '1.234', '90071992547410']) {
+  for (const invalid of ['', '0', '1.234', '90071992547410']) {
     await change(amount, invalid);
     assert.equal(amount.getAttribute('aria-invalid'), 'true');
     assert.ok(!buttons().some(b => b.textContent === 'Сохранить операции'));
   }
+  await change(amount, '-2');
+  assert.equal(amount.value, '2');
+  assert.equal(amount.getAttribute('aria-invalid'), 'false');
+  const checksBefore = requests.filter(r => r.url === '/api/imports/check').length;
+  await change(amount, '2abc');
+  assert.equal(amount.value, '2');
+  assert.equal(requests.filter(r => r.url === '/api/imports/check').length, checksBefore);
   await change(amount, '12,34');
   assert.equal(amount.getAttribute('aria-invalid'), 'false');
   const checked = requests.filter(r => r.url === '/api/imports/check').at(-1).body.rows[0];
@@ -552,4 +594,17 @@ test('deleting a part removes it from three parts and cancels splitting with two
   assert.equal(rows[0].parts, undefined);
   assert.equal(rows[0].amountMinor, -100);
   assert.equal(rows[0].comment, 'Comment 1');
+});
+
+
+test('money input cleanup preserves caret and supports clearing', () => {
+  const input = document.createElement('input');
+  input.value = '12abc,34';
+  input.setSelectionRange(5, 5);
+  assert.equal(cleanMoneyInput(input), '12.34');
+  assert.equal(input.selectionStart, 2);
+  input.value = '';
+  assert.equal(cleanMoneyInput(input), '');
+  input.value = '-1-2,34';
+  assert.equal(cleanMoneyInput(input, true), '-12.34');
 });

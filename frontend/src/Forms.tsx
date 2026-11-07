@@ -1,7 +1,7 @@
 import { TagInput } from './Tags';
 import { useState, type FormEvent } from 'react';
 import { api, type Account, type Category, type Kind, type Operation, type OperationInput, type Screen } from './api';
-import { Appearance, ErrorNotice, Modal, message, money, moneyInput, parseMoneyInput, today } from './ui';
+import { Appearance, ErrorNotice, Modal, message, money, moneyInput, cleanMoneyInput, parseMoneyInput, today } from './ui';
 
 type FormProps = { onClose: () => void; onSaved: (notice: string) => void };
 export function AccountForm({ account, onClose, onSaved }: FormProps & { account?: Account }) {
@@ -26,7 +26,7 @@ export function AccountForm({ account, onClose, onSaved }: FormProps & { account
   return <Modal title={account ? 'Редактировать счёт' : 'Новый счёт'} busy={busy} onClose={onClose}><form onSubmit={save}>
     <fieldset disabled={busy}>
       <label className="field">Название<input autoFocus required maxLength={80} value={name} onChange={e => setName(e.target.value)} placeholder="Например, основная карта" /></label>
-      <label className="field">{account ? 'Текущий баланс, ₽' : 'Начальный баланс, ₽'}<input required inputMode="decimal" value={balance} onChange={e => setBalance(e.target.value)} /></label>
+      <label className="field">{account ? 'Текущий баланс, ₽' : 'Начальный баланс, ₽'}<input required inputMode="decimal" value={balance} onChange={e => setBalance(cleanMoneyInput(e.target, true))} /></label>
       <p className="field-note">{account ? 'Изменение остатка не учитывается в доходах и расходах.' : 'Каждая сохранённая операция изменит этот остаток, независимо от её даты.'}</p>
       <Appearance color={color} icon={icon} onColor={setColor} onIcon={setIcon} />
       <ErrorNotice error={error} />
@@ -92,7 +92,7 @@ export function OperationForm({ operation, screen, onClose, onSaved }: FormProps
   }
   return <Modal title={operation ? 'Редактировать операцию' : 'Новая операция'} busy={busy} onClose={onClose}><form onSubmit={save}><fieldset disabled={busy}>
     <label className="field">Тип операции<select value={kind} onChange={e => { setKind(e.target.value as Kind); setCategory(0); }}><option value="expense">Расход</option><option value="income">Доход</option><option value="transfer">Перевод</option></select></label>
-    <div className="form-grid"><label className="field">Сумма, ₽<input autoFocus required inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0,00" /></label><label className="field">Дата<input required type="date" min="1900-01-01" max="9999-12-31" value={date} onChange={e => setDate(e.target.value)} /></label></div>
+    <div className="form-grid"><label className="field">Сумма, ₽<input autoFocus required inputMode="decimal" value={amount} onChange={e => setAmount(cleanMoneyInput(e.target))} placeholder="0,00" /></label><label className="field">Дата<input required type="date" min="1900-01-01" max="9999-12-31" value={date} onChange={e => setDate(e.target.value)} /></label></div>
     {kind !== 'income' && accountSelect('Откуда', source, setSource, kind === 'transfer' ? destination : undefined)}
     {kind !== 'expense' && accountSelect('Куда', destination, setDestination, kind === 'transfer' ? source : undefined)}
     {kind !== 'transfer' && <label className="field">{kind === 'income' ? 'Источник дохода' : 'Категория расхода'}<select required value={category || ''} onChange={e => setCategory(Number(e.target.value))}><option value="">Выберите категорию</option>{categories.map(c => <option key={c.id} value={c.id}>{c.name}{c.archived ? ' · в архиве' : ''}</option>)}</select></label>}

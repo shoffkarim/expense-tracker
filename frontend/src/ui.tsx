@@ -35,6 +35,24 @@ export function moneyInput(minor: number) {
   const amount = BigInt(minor); const absolute = amount < 0n ? -amount : amount;
   return `${amount < 0n ? '-' : ''}${absolute / 100n}.${String(absolute % 100n).padStart(2, '0')}`;
 }
+export function sanitizeMoneyInput(raw: string, allowNegative = false): string {
+  const value = raw.replace(/,/g, '.').replace(allowNegative ? /[^0-9.\-]/g : /[^0-9.]/g, '');
+  return allowNegative ? (value.startsWith('-') ? '-' : '') + value.replace(/-/g, '') : value;
+}
+export function cleanMoneyInput(input: HTMLInputElement, allowNegative = false): string {
+  const raw = input.value;
+  const value = sanitizeMoneyInput(raw, allowNegative);
+  if (raw !== value) {
+    const start = input.selectionStart;
+    const end = input.selectionEnd;
+    input.value = value;
+    if (start !== null && end !== null) {
+      input.setSelectionRange(sanitizeMoneyInput(raw.slice(0, start), allowNegative).length,
+        sanitizeMoneyInput(raw.slice(0, end), allowNegative).length);
+    }
+  }
+  return value;
+}
 export function parseMoneyInput(raw: string, allowNegative = false): number {
   const value = raw.trim().replace(',', '.');
   if (!(allowNegative ? /^-?\d+(?:\.\d{1,2})?$/ : /^\d+(?:\.\d{1,2})?$/).test(value)) throw new Error('Введите сумму в рублях, не более двух знаков после запятой.');
