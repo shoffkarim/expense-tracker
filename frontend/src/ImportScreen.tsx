@@ -1,12 +1,16 @@
 import { TagInput } from './Tags';
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type Dispatch, type SetStateAction } from 'react';
 import { api, ApiError, parseStatement, type Draft, type ImportCheck, type ImportPayload, type ImportResult, type ImportRow, type Screen } from './api';
 import { AccountForm } from './Forms';
 import { ImportPicker } from './ImportPicker';
 import { ErrorNotice, Icon, dateLabel, message, moneyInput, parseMoneyInput } from './ui';
 
-const rowKey = (row: Pick<ImportRow, 'sourcePage' | 'rowNumber'>) => `${row.sourcePage}:${row.rowNumber}`;
-const rowSetKey = (draft: Draft | null) => draft ? `${draft.id}/${draft.rows.map(row => `${rowKey(row)}:${row.amountMinor}:${row.amountError || ''}`).join(',')}` : '';
+const rowKey = (row: Pick<ImportRow, 'sourcePage' | 'rowNumber' | 'localId'>) => `${row.sourcePage}:${row.rowNumber}${row.localId || ""}`;
+const rowSetKey = (draft: Draft | null) => draft ? `${draft.id}/${draft.rows.map(row => `${rowKey(row)}:${row.amountMinor}:${row.amountError || ''}:${JSON.stringify(row.parts)}`).join(',')}` : '';
+const splitInvalid = (row: ImportRow) => !!row.parts && (
+  row.parts.some(part => !!part.amountError) ||
+  row.parts.reduce((sum, part) => sum + BigInt(part.amountMinor), 0n) !== BigInt(row.amountMinor)
+);
 type CheckedRows = { key: string; alreadyImported: boolean; rows: Record<string, ImportCheck['rows'][number]> };
 
 type Props = { draft: Draft | null; setDraft: Dispatch<SetStateAction<Draft | null>>; active: boolean; revision: number; onChanged: (notice: string) => void };
@@ -44,10 +48,10 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
 
   useEffect(() => {
     const currentDraft = draftRef.current;
-    if (!active || !currentDraft || !currentDraft.rows.length || !accountId || pendingSubmission || currentDraft.rows.some(row => row.amountError)) { setCheck(null); setChecking(false); setCheckError(''); return; }
+    if (!active || !currentDraft || !currentDraft.rows.length || !accountId || pendingSubmission || currentDraft.rows.some(row => row.amountError || splitInvalid(row))) { setCheck(null); setChecking(false); setCheckError(''); return; }
     const controller = new AbortController();
     setChecking(true); setCheck(null); setCheckError('');
-    api<ImportCheck>('/imports/check', 'POST', { accountId, fileHash: currentDraft.fileHash, rows: currentDraft.rows.map(({ ruleName: _ruleName, statementNumber: _statementNumber, amountText: _amountText, amountError: _amountError, ...row }) => row) }, controller.signal)
+    api<ImportCheck>('/imports/check', 'POST', { accountId, fileHash: currentDraft.fileHash, rows: currentDraft.rows.map(({ ruleName: _ruleName, statementNumber: _statementNumber, amountText: _amountText, amountError: _amountError, ...row }) => ({...row, parts: row.parts?.map(({amountMinor,categoryId,otherAccountId,tags,comment}) => ({amountMinor,categoryId,otherAccountId,tags,comment}))})) }, controller.signal)
       .then(result => {
         if (controller.signal.aborted || rowSetKey(draftRef.current) !== rowsKey) return;
         const rows = Object.fromEntries(currentDraft.rows.map((row, i) => [rowKey(row), result.rows[i]]));
@@ -77,29 +81,29 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
       setDraft({ id: crypto.randomUUID(), fileName: file.name, fileHash: result.fileHash, warnings: result.warnings, rows: result.transactions.map((t, index) => ({ ...t, statementNumber: index + 1, comment: '', decision: t.amountMinor === 0 ? 'skip' : 'save' })) });
     } catch (e) { setError(message(e)); } finally { setLoading(false); busyRef.current = false; }
   }
-  function updateRow(key: string, patch: Partial<ImportRow>) { setDraft(current => current ? { ...current, rows: current.rows.map(row => rowKey(row) === key ? { ...row, ...patch } : row) } : null); }
+  function splitRow(row: ImportRow) {
+    const child = () => ({ ...row, parts: undefined, localId: crypto.randomUUID(), amountText: '', amountError: 'Введите сумму.', matchToken: undefined });
+    updateRow(rowKey(row), { parts: [child(), child()], decision: 'save', matchToken: undefined });
+  }
+  function updateRow(key: string, patch: Partial<ImportRow>) { setDraft(current => current ? { ...current, rows: current.rows.map(row => rowKey(row) === key ? { ...row, ...patch } : { ...row, parts: row.parts?.map(part => rowKey(part) === key ? {...part, ...patch} : part) }) } : null); }
   function updateAmount(key: string, text: string) {
     if (locked || busyRef.current) return;
-    setDraft(current => current ? { ...current, rows: current.rows.map(row => {
-      if (rowKey(row) !== key || row.amountMinor === 0) return row;
-      let amountMinor = row.amountMinor;
-      let amountError = '';
-      try {
-        const value = parseMoneyInput(text);
-        if (value === 0) throw new Error('Сумма должна быть больше нуля.');
-        amountMinor = row.amountMinor < 0 ? -value : value;
-      } catch (e) { amountError = message(e); }
-      return { ...row, amountText: text, amountError, amountMinor,
-        ...(amountMinor !== row.amountMinor || amountError !== (row.amountError || '') ? {
-          ruleName: undefined, matchToken: undefined,
-          decision: row.decision === 'keep' ? 'save' as const : row.decision
-        } : {}) };
-    }) } : null);
+    const row = draft?.rows.flatMap(r => r.parts || [r]).find(r => rowKey(r) === key);
+    if (!row) return;
+    try { const value = parseMoneyInput(text); if (!value) throw new Error('Сумма должна быть больше нуля.'); updateRow(key, { amountText: text, amountError: '', amountMinor: row.amountMinor < 0 ? -value : value, matchToken: undefined, decision: 'save' }); }
+    catch(e) { updateRow(key, {amountText: text, amountError: message(e)}); }
   }
+
   function removeRow(key: string) {
     if (locked || busyRef.current) return;
     setCheck(null); setCheckError('');
-    setDraft(current => current ? { ...current, rows: current.rows.filter(row => rowKey(row) !== key) } : null);
+    setDraft(current => current ? {
+      ...current,
+      rows: current.rows.filter(row => rowKey(row) !== key).map(row => {
+        if (!row.parts?.some(part => rowKey(part) === key)) return row;
+        return { ...row, parts: row.parts.length === 2 ? undefined : row.parts.filter(part => rowKey(part) !== key) };
+      })
+    } : null);
   }
   function chooseAccount(id: number) {
     if (draft && accountId && !window.confirm("Сменить счёт и удалить черновик? Потребуется загрузить PDF заново.")) return;
@@ -109,19 +113,20 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
   function clearDraft() {
     if (!locked && window.confirm('Очистить черновик? Операции из него ещё не сохранены.')) { setDraft(null); setError(''); setCheck(null); }
   }
-  const rowReady = (row: ImportRow) => {
+  const rowReady = (row: ImportRow): boolean => {
     if (row.decision === 'skip') return true;
+    if (row.parts) return row.parts.every(part => rowReady({...part, decision: 'save'})) && row.parts.reduce((sum,p) => sum + BigInt(p.amountMinor), 0n) === BigInt(row.amountMinor) && (!currentCheck?.rows[rowKey(row)]?.matches.length || row.decision === 'keep');
     if ('amountError' in row && row.amountError) return false;
     const validCategory = screen?.categories.some(c => c.id === row.categoryId && c.kind === (row.amountMinor < 0 ? 'expense' : 'income'));
     const validAccount = row.otherAccountId !== accountId && screen?.accounts.some(a => a.id === row.otherAccountId);
-    return row.amountMinor !== 0 && (validCategory || validAccount) && (!currentCheck?.rows[rowKey(row)]?.matches.length || row.decision === 'keep');
+    return row.amountMinor !== 0 && !!(validCategory || validAccount) && (!currentCheck?.rows[rowKey(row)]?.matches.length || row.decision === 'keep');
   };
-  const kept = draft?.rows.filter(r => r.decision !== 'skip').length || 0;
+  const kept = draft?.rows.reduce((n,r) => n + (r.decision === 'skip' ? 0 : r.parts?.length || 1), 0) || 0;
   const readyCount = draft?.rows.filter(rowReady).length || 0;
   const ready = !!draft?.rows.length && kept > 0 && readyCount === draft.rows.length && !!currentCheck && !currentCheck.alreadyImported && !checking && !!screen && !dataError;
   async function save() {
     if (busyRef.current || (!ready && !pendingSubmission) || !draft) return;
-    const payload = pendingSubmission || { accountId, fileHash: draft.fileHash, rows: draft.rows.map(({ ruleName: _ruleName, statementNumber: _statementNumber, amountText: _amountText, amountError: _amountError, ...row }) => row), requestKey: crypto.randomUUID() };
+    const payload = pendingSubmission || { accountId, fileHash: draft.fileHash, rows: draft.rows.map(({ ruleName: _ruleName, statementNumber: _statementNumber, amountText: _amountText, amountError: _amountError, ...row }) => ({...row, parts: row.parts?.map(({amountMinor,categoryId,otherAccountId,tags,comment}) => ({amountMinor,categoryId,otherAccountId,tags,comment}))})), requestKey: crypto.randomUUID() };
     busyRef.current = true; setSaving(true); setError(''); setPendingSubmission(payload);
     try {
       const result = await api<ImportResult>('/imports', 'POST', payload);
@@ -134,6 +139,61 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
       }
       // On an ambiguous network/server failure retain the exact payload and key.
     } finally { setSaving(false); busyRef.current = false; }
+  }
+  function renderRow(row: ImportRow, number: number | string): ReactNode {
+          const key = rowKey(row);
+          const matches = currentCheck?.rows[key]?.matches || [];
+          const selected = row.categoryId ? `category:${row.categoryId}` : row.otherAccountId ? `account:${row.otherAccountId}` : '';
+          const hasDestination = row.categoryId
+            ? screen?.categories.some(c => c.id === row.categoryId && c.kind === (row.amountMinor < 0 ? 'expense' : 'income'))
+            : row.otherAccountId !== accountId && screen?.accounts.some(a => a.id === row.otherAccountId);
+          const direction = row.amountMinor < 0 ? 'Куда' : 'Откуда';
+          return <article key={key} className={`import-row${hasDestination && row.decision !== 'skip' ? ' is-categorized' : ''}`}>
+            <div className="import-row-top"><span className="import-number">№{number}</span><time dateTime={row.date}>{dateLabel(row.date)}</time><label className={`import-amount ${row.amountMinor > 0 ? 'income' : 'expense'}`}>
+                <span aria-hidden="true">{row.amountMinor < 0 ? '−' : '+'}</span>
+                <input type="text" inputMode="decimal" aria-label={`Сумма операции ${number}`}
+                  aria-invalid={!!row.amountError} aria-describedby={row.amountError ? `amount-error-${key}` : undefined}
+                  value={row.amountText ?? moneyInput(Math.abs(row.amountMinor))}
+                  disabled={locked || row.amountMinor === 0 || !!row.parts}
+                  onChange={e => updateAmount(key, e.target.value)} />
+                <span>₽</span>
+              </label>
+              {!row.localId && row.amountMinor !== 0 && <button type="button" className="import-icon-button" disabled={locked}
+                aria-label={row.parts ? `Отменить разделение операции ${number}` : `Разделить операцию ${number}`}
+                title={row.parts ? 'Отменить разделение' : 'Разделить'} aria-pressed={!!row.parts}
+                onClick={() => row.parts ? updateRow(key, {parts: undefined}) : splitRow(row)}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 21v-7M12 14 5 7V3M12 14l7-7V3M2 6l3-3 3 3M16 6l3-3 3 3" /></svg>
+              </button>}
+              <button type="button" className="import-delete" disabled={locked} aria-label={`Удалить операцию ${number}`} title="Удалить из списка" onClick={() => removeRow(key)}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" /></svg>
+              </button>
+            </div>
+            {row.amountError && <p className="error-panel" role="alert" id={`amount-error-${key}`}>{row.amountError}</p>}
+            <p className="import-description">{row.description}</p>{row.ruleName && <p className="muted">Правило: {row.ruleName}</p>}
+            {row.parts && <div className="import-split">
+              <p>Сумма частей: {moneyInput(Math.abs(row.parts.reduce((sum,p) => sum+p.amountMinor,0)))} ₽ из {moneyInput(Math.abs(row.amountMinor))} ₽.</p>
+              {row.parts.every(part => !part.amountError && !!part.amountText?.trim()) && splitInvalid(row) && <p className="error-panel" role="alert">Сумма частей должна совпадать с исходной.</p>}
+              <div className="import-parts">{row.parts.map((part, index) => renderRow(part, `${number}.${index + 1}`))}</div>
+              <button type="button" className="import-icon-button import-add-part" aria-label={`Добавить часть операции ${number}`} title="Добавить часть" disabled={locked} onClick={() => updateRow(key, {parts: [...row.parts!, {...row, parts: undefined, localId: crypto.randomUUID(), amountText: '', amountError: 'Введите сумму.'}]})}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
+            </div>}
+            {!row.parts && <div className="import-row-fields">
+              <div className="import-direction"><span>{direction}</span><ImportPicker label={`${direction} для операции ${number}`} value={selected} disabled={locked || !active || row.decision === 'skip' || !accountId}
+                groups={[
+                  { label: row.amountMinor < 0 ? 'Расходы' : 'Доходы', options: (screen?.categories || []).filter(c => c.kind === (row.amountMinor < 0 ? 'expense' : 'income')).map(c => ({ ...c, value: `category:${c.id}` })) },
+                  { label: 'Перевод между счетами', options: (screen?.accounts || []).filter(a => a.id !== accountId).map(a => ({ ...a, value: `account:${a.id}` })) },
+                ]}
+                onChange={value => {
+                  const [type, id] = value.split(':');
+                  updateRow(key, { ruleName: undefined, categoryId: type === 'category' ? Number(id) : undefined, otherAccountId: type === 'account' ? Number(id) : undefined });
+                }} /></div>
+              <TagInput label={`Теги операции ${number}`} value={row.tags} onChange={tags => updateRow(key, { tags })} disabled={locked || row.decision === 'skip'} />
+              <input className="import-comment" aria-label={`Комментарий операции ${number}`} maxLength={2000} value={row.comment} disabled={locked || row.decision === 'skip'} placeholder="Комментарий" onChange={e => updateRow(key, { comment: e.target.value })} />
+            </div>}
+            {row.amountMinor === 0 && <p className="import-zero-note">Нулевая сумма — операция не будет сохранена.</p>}
+            {!!matches.length && row.decision !== 'skip' && <div className="duplicate-note">{matches.map((match, i) => <p key={i}>{match.relatedRows ? `Похожие строки в этой выписке: ${match.relatedRows.map(ref => draft?.rows.find(candidate => rowKey(candidate) === rowKey(ref))).filter((candidate): candidate is Draft['rows'][number] => !!candidate).map(candidate => `№${candidate.statementNumber}`).join(', ')}. Оставьте нужные или подтвердите отдельные операции.` : <>{match.transactionId ? `Совпадение с ранее сохранённой операцией в истории, ID ${match.transactionId}. ` : ''}{match.reason}</>}</p>)}
+              <label className="duplicate-confirm"><input type="checkbox" checked={row.decision === 'keep'} disabled={locked || checking} onChange={e => updateRow(key, { decision: e.target.checked ? 'keep' : 'save' })} /><span>Сохранить как отдельную операцию</span></label>
+            </div>}
+          </article>;
   }
   return <>
     <section className="overview-hero"><div><p className="eyebrow">От выписки — к учёту</p><h1>Загрузить выписку</h1><p className="intro-copy">Выберите счёт, распределите операции и сохраните результат.</p></div><span className="step-label">PDF → категории → история</span></section>
@@ -157,50 +217,7 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
       {checkError && <button className="text-button" disabled={locked} onClick={() => setCheckRetry(v => v + 1)}>Проверить совпадения ещё раз</button>}
       {!!draft.rows.length && <>
         <p className="table-note">{checking ? 'Проверяем совпадения…' : !accountId ? 'Выберите счёт выписки, чтобы проверить совпадения.' : 'Сверьте операции с PDF. Перевод между своими счетами учитывается один раз.'}</p>
-        <div className="import-list">{draft.rows.map(row => {
-          const key = rowKey(row);
-          const number = row.statementNumber;
-          const matches = currentCheck?.rows[key]?.matches || [];
-          const selected = row.categoryId ? `category:${row.categoryId}` : row.otherAccountId ? `account:${row.otherAccountId}` : '';
-          const hasDestination = row.categoryId
-            ? screen?.categories.some(c => c.id === row.categoryId && c.kind === (row.amountMinor < 0 ? 'expense' : 'income'))
-            : row.otherAccountId !== accountId && screen?.accounts.some(a => a.id === row.otherAccountId);
-          const direction = row.amountMinor < 0 ? 'Куда' : 'Откуда';
-          return <article key={key} className={`import-row${hasDestination && row.decision !== 'skip' ? ' is-categorized' : ''}`}>
-            <div className="import-row-top"><span className="import-number">№{number}</span><time dateTime={row.date}>{dateLabel(row.date)}</time><label className={`import-amount ${row.amountMinor > 0 ? 'income' : 'expense'}`}>
-                <span aria-hidden="true">{row.amountMinor < 0 ? '−' : '+'}</span>
-                <input type="text" inputMode="decimal" aria-label={`Сумма операции ${number}`}
-                  aria-invalid={!!row.amountError} aria-describedby={row.amountError ? `amount-error-${key}` : undefined}
-                  value={row.amountText ?? moneyInput(Math.abs(row.amountMinor))}
-                  disabled={locked || row.amountMinor === 0}
-                  onChange={e => updateAmount(key, e.target.value)} />
-                <span>₽</span>
-              </label>
-              <button type="button" className="import-delete" disabled={locked} aria-label={`Удалить операцию ${number}`} title="Удалить из списка" onClick={() => removeRow(key)}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" /></svg>
-              </button>
-            </div>
-            {row.amountError && <p className="error-panel" role="alert" id={`amount-error-${key}`}>{row.amountError}</p>}
-            <p className="import-description">{row.description}</p>{row.ruleName && <p className="muted">Правило: {row.ruleName}</p>}
-            <div className="import-row-fields">
-              <div className="import-direction"><span>{direction}</span><ImportPicker label={`${direction} для операции ${number}`} value={selected} disabled={locked || !active || row.decision === 'skip' || !accountId}
-                groups={[
-                  { label: row.amountMinor < 0 ? 'Расходы' : 'Доходы', options: (screen?.categories || []).filter(c => c.kind === (row.amountMinor < 0 ? 'expense' : 'income')).map(c => ({ ...c, value: `category:${c.id}` })) },
-                  { label: 'Перевод между счетами', options: (screen?.accounts || []).filter(a => a.id !== accountId).map(a => ({ ...a, value: `account:${a.id}` })) },
-                ]}
-                onChange={value => {
-                  const [type, id] = value.split(':');
-                  updateRow(key, { ruleName: undefined, categoryId: type === 'category' ? Number(id) : undefined, otherAccountId: type === 'account' ? Number(id) : undefined });
-                }} /></div>
-              <TagInput label={`Теги операции ${number}`} value={row.tags} onChange={tags => updateRow(key, { tags })} disabled={locked || row.decision === 'skip'} />
-              <input className="import-comment" aria-label={`Комментарий операции ${number}`} maxLength={2000} value={row.comment} disabled={locked || row.decision === 'skip'} placeholder="Комментарий" onChange={e => updateRow(key, { comment: e.target.value })} />
-            </div>
-            {row.amountMinor === 0 && <p className="import-zero-note">Нулевая сумма — операция не будет сохранена.</p>}
-            {!!matches.length && row.decision !== 'skip' && <div className="duplicate-note">{matches.map((match, i) => <p key={i}>{match.relatedRows ? `Похожие строки в этой выписке: ${match.relatedRows.map(ref => draft.rows.find(candidate => rowKey(candidate) === rowKey(ref))).filter((candidate): candidate is Draft['rows'][number] => !!candidate).map(candidate => `№${candidate.statementNumber}`).join(', ')}. Оставьте нужные или подтвердите отдельные операции.` : <>{match.transactionId ? `Совпадение с ранее сохранённой операцией в истории, ID ${match.transactionId}. ` : ''}{match.reason}</>}</p>)}
-              <label className="duplicate-confirm"><input type="checkbox" checked={row.decision === 'keep'} disabled={locked || checking} onChange={e => updateRow(key, { decision: e.target.checked ? 'keep' : 'save' })} /><span>Сохранить как отдельную операцию</span></label>
-            </div>}
-          </article>;
-        })}</div>
+        <div className="import-list">{draft.rows.map(row => renderRow(row, row.statementNumber))}</div>
         <div className="import-save-bar"><div><strong>{pendingSubmission ? 'Подтвердите результат сохранения' : `Разобрано ${readyCount} из ${draft.rows.length}`}</strong><p>{pendingSubmission ? 'Повтор отправит тот же запрос и не создаст операции дважды.' : `Будет сохранено: ${kept}. Пропущено: ${draft.rows.length - kept}.`}</p></div>
           {(ready || pendingSubmission) ? <button className="primary-button" disabled={saving} onClick={() => void save()}>{saving ? 'Сохраняем…' : pendingSubmission ? 'Повторить сохранение' : 'Сохранить операции'}</button> : <span className="muted">{currentCheck?.alreadyImported ? 'Выписка уже сохранена' : kept === 0 ? 'Все строки пропущены' : 'Распределите операции и проверьте совпадения'}</span>}
         </div>

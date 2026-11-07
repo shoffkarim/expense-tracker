@@ -501,3 +501,55 @@ test('late duplicate check cannot authorize an edited amount', async () => {
   assert.equal(document.querySelector('.duplicate-confirm input').checked, false);
   assert.ok(!buttons().some(b => b.textContent === 'Сохранить операции'));
 });
+
+test('split requires complete matching amounts and saves only parts', async () => {
+ mockImportChecks(cleanCheck);
+ await render(h(DraftHarness, {rows: [syntheticRows()[0]]}));
+ await change(field('Счёт выписки'), '1');
+ await click(document.querySelector('[aria-label="Разделить операцию 1"]'));
+ assert.equal(document.querySelector('[aria-label="Сумма операции 1.1"]').value, '');
+ const parent = document.querySelector('.import-list > .import-row');
+ assert.equal(document.querySelectorAll('.import-list > .import-row').length, 1);
+ assert.equal(parent.querySelectorAll('.import-parts > .import-row').length, 2);
+ assert.doesNotMatch(parent.textContent, /Сумма частей должна совпадать с исходной/);
+ assert.ok(!requests.filter(r => r.url === '/api/imports/check').at(-1).body.rows[0].parts);
+
+ assert.ok(!buttons().some(b => b.textContent === 'Сохранить операции'));
+ await change(document.querySelector('[aria-label="Сумма операции 1.1"]'), '0.75');
+ assert.doesNotMatch(parent.textContent, /Сумма частей должна совпадать с исходной/);
+ await change(document.querySelector('[aria-label="Сумма операции 1.2"]'), '0.50');
+ assert.match(parent.textContent, /Сумма частей должна совпадать с исходной/);
+ assert.ok(!buttons().some(b => b.textContent === 'Сохранить операции'));
+ await change(document.querySelector('[aria-label="Сумма операции 1.2"]'), '');
+ assert.doesNotMatch(parent.textContent, /Сумма частей должна совпадать с исходной/);
+ await change(document.querySelector('[aria-label="Сумма операции 1.2"]'), '0.25');
+ assert.doesNotMatch(parent.textContent, /Сумма частей должна совпадать с исходной/);
+ await click(button('Сохранить операции'));
+ const row=requests.find(r => r.url === '/api/imports').body.rows[0];
+ assert.deepEqual(row.parts.map(p=>p.amountMinor),[-75,-25]);
+ assert.ok(!('localId' in row.parts[0]));
+});
+
+test('deleting a part removes it from three parts and cancels splitting with two', async () => {
+  mockImportChecks(cleanCheck);
+  await render(h(DraftHarness));
+  await change(field('Счёт выписки'), '1');
+  await click(document.querySelector('[aria-label="Разделить операцию 1"]'));
+  await click(document.querySelector('[aria-label="Добавить часть операции 1"]'));
+  assert.equal(document.querySelectorAll('.import-parts > .import-row').length, 3);
+  await deleteRow('1.2');
+  assert.equal(document.querySelectorAll('.import-parts > .import-row').length, 2);
+  await deleteRow('1.1');
+  assert.equal(document.querySelector('.import-parts'), null);
+  assert.equal(document.querySelectorAll('.import-list > .import-row').length, 3);
+  const amount = document.querySelector('[aria-label="Сумма операции 1"]');
+  assert.equal(amount.value, '1.00');
+  assert.equal(amount.disabled, false);
+  assert.ok(document.querySelector('[aria-label="Разделить операцию 1"]'));
+  await click(button('Сохранить операции'));
+  const rows = requests.find(r => r.url === '/api/imports').body.rows;
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0].parts, undefined);
+  assert.equal(rows[0].amountMinor, -100);
+  assert.equal(rows[0].comment, 'Comment 1');
+});

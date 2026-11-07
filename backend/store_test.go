@@ -517,3 +517,26 @@ func TestImportEditedAmount(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitImport(t *testing.T) {
+	s := testStore(t)
+	a := account(t, s, "Synthetic", 1000000)
+	cat := categoryID(t, s, "expense")
+	in := importInput(a, cat, "split")
+	in.Rows[0].AmountMinor = -200000
+	in.Rows[0].Parts = []ImportPart{{AmountMinor: -150000, CategoryID: cat}, {AmountMinor: -50000, CategoryID: cat}}
+	out, err := s.saveImport(testContext, in)
+	if err != nil || out.Saved != 2 {
+		t.Fatal(out, err)
+	}
+	balance(t, s, a, 800000)
+	again, err := s.saveImport(testContext, in)
+	if err != nil || again != out {
+		t.Fatal(again, err)
+	}
+	balance(t, s, a, 800000)
+	in.Rows[0].Parts[0].AmountMinor = -1
+	if _, err = s.saveImport(testContext, in); err == nil {
+		t.Fatal("accepted mismatched sum")
+	}
+}

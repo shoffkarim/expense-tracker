@@ -95,7 +95,7 @@ func TestTagsMigration(t *testing.T) {
 			}
 			var got int
 			s.db.QueryRow("PRAGMA user_version").Scan(&got)
-			if got != 3 {
+			if got != 4 {
 				t.Fatal(got)
 			}
 			var balance int64

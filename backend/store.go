@@ -68,16 +68,20 @@ func openStore(path string) (*Store, error) {
 }
 
 func (s *Store) migrate() error {
-	return s.write(context.Background(), func(tx *sql.Tx) error {
+	err := s.write(context.Background(), func(tx *sql.Tx) error {
 		var version int
 		if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 			return err
 		}
-		if version > 3 {
+		if version > 4 {
 			return errors.New("база создана более новой версией приложения")
 		}
-		if version == 3 {
+		if version == 4 {
 			return nil
+		}
+		if version == 3 {
+			_, err := tx.Exec("ALTER TABLE import_rows RENAME TO import_rows_old; DROP INDEX import_rows_match; CREATE TABLE import_rows (import_id INTEGER NOT NULL REFERENCES imports(id), source_page INTEGER NOT NULL, row_number INTEGER NOT NULL, date TEXT NOT NULL, amount_minor INTEGER NOT NULL, description_key TEXT NOT NULL, transaction_id INTEGER NOT NULL REFERENCES transactions(id), part_index INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(import_id,source_page,row_number,part_index)); INSERT INTO import_rows SELECT import_id,source_page,row_number,date,amount_minor,description_key,transaction_id,0 FROM import_rows_old; DROP TABLE import_rows_old; CREATE INDEX import_rows_match ON import_rows(date,amount_minor,description_key); PRAGMA user_version=4")
+			return err
 		}
 		if _, err := tx.Exec(tagsSchema); err != nil {
 			return err
@@ -118,6 +122,17 @@ func (s *Store) migrate() error {
 		_, err := tx.Exec("PRAGMA user_version = 3")
 		return err
 	})
+	if err != nil {
+		return err
+	}
+	var version int
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if version < 4 {
+		return s.migrate()
+	}
+	return nil
 }
 
 func (s *Store) write(ctx context.Context, fn func(*sql.Tx) error) error {

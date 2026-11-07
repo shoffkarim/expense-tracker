@@ -12,8 +12,35 @@ import (
 	"unicode/utf8"
 )
 
+type ImportPart struct {
+	AmountMinor    int64    `json:"amountMinor"`
+	CategoryID     int64    `json:"categoryId,omitempty"`
+	OtherAccountID int64    `json:"otherAccountId,omitempty"`
+	Tags           []string `json:"tags,omitempty"`
+	Comment        string   `json:"comment"`
+}
+
+func operationRows(row ImportRow) []ImportRow {
+	if len(row.Parts) == 0 {
+		return []ImportRow{row}
+	}
+	out := []ImportRow{}
+	for _, part := range row.Parts {
+		child := row
+		child.Parts = nil
+		child.AmountMinor = part.AmountMinor
+		child.CategoryID = part.CategoryID
+		child.OtherAccountID = part.OtherAccountID
+		child.Tags = part.Tags
+		child.Comment = part.Comment
+		out = append(out, child)
+	}
+	return out
+}
+
 type ImportRow struct {
-	Tags []string `json:"tags,omitempty"`
+	Parts []ImportPart `json:"parts,omitempty"`
+	Tags  []string     `json:"tags,omitempty"`
 	Transaction
 	CategoryID     int64  `json:"categoryId,omitempty"`
 	OtherAccountID int64  `json:"otherAccountId,omitempty"`
@@ -71,7 +98,38 @@ func validateImport(in ImportInput) error {
 		return invalid("Выберите счёт и выписку, содержащую от 1 до 5000 операций.")
 	}
 	positions := map[string]bool{}
+	count := 0
 	for _, row := range in.Rows {
+		count += len(operationRows(row))
+		if count > 5000 {
+			return invalid("Слишком много операций.")
+		}
+		if row.Parts != nil {
+			if len(row.Parts) < 2 {
+				return invalid("Нужно минимум две части.")
+			}
+			var sum int64
+			for _, part := range row.Parts {
+				amount := part.AmountMinor
+				if amount == 0 || amount < -maxMoney || amount > maxMoney || (amount < 0) != (row.AmountMinor < 0) || utf8.RuneCountInString(part.Comment) > 2000 {
+					return invalid("Некорректная часть операции.")
+				}
+				if amount < 0 {
+					amount = -amount
+				}
+				if sum > maxMoney-amount {
+					return invalid("Слишком большая сумма частей.")
+				}
+				sum += amount
+			}
+			total := row.AmountMinor
+			if total < 0 {
+				total = -total
+			}
+			if sum != total {
+				return invalid("Сумма частей должна совпадать с исходной.")
+			}
+		}
 		if !validDate(row.Date) || row.AmountMinor < -maxMoney || row.AmountMinor > maxMoney || row.SourcePage <= 0 || row.RowNumber <= 0 || utf8.RuneCountInString(row.Description) > 4000 || utf8.RuneCountInString(row.Comment) > 2000 {
 			return invalid("В выписке есть некорректная строка.")
 		}
@@ -174,7 +232,7 @@ func checkImport(ctx context.Context, tx *sql.Tx, in ImportInput) (ImportCheck, 
 			}
 			check.Matches = append(check.Matches, ImportMatch{RelatedRows: related, Reason: "Похожие строки в этой выписке."})
 		}
-		check.MatchToken = digest([]any{in.AccountID, in.FileHash, rowKey(row), check.Matches})
+		check.MatchToken = digest([]any{in.AccountID, in.FileHash, rowKey(row), row.Parts, check.Matches})
 		out.Rows = append(out.Rows, check)
 	}
 	return out, nil
@@ -252,14 +310,17 @@ func (s *Store) saveImport(ctx context.Context, in ImportInput) (ImportResult, e
 			if len(check.Rows[i].Matches) > 0 && (row.Decision != "keep" || row.MatchToken != check.Rows[i].MatchToken) {
 				return conflict("Обнаружены возможные повторы. Проверьте совпадения перед сохранением.")
 			}
-			o, err := importOperation(in.AccountID, row)
-			if err != nil {
-				return err
+			for partIndex, child := range operationRows(row) {
+				_ = partIndex
+				o, err := importOperation(in.AccountID, child)
+				if err != nil {
+					return err
+				}
+				if err = validateOperation(ctx, tx, o, nil); err != nil {
+					return err
+				}
+				out.Saved++
 			}
-			if err = validateOperation(ctx, tx, o, nil); err != nil {
-				return err
-			}
-			out.Saved++
 		}
 		if out.Saved == 0 {
 			return invalid("Нет операций для сохранения.")
@@ -276,17 +337,20 @@ func (s *Store) saveImport(ctx context.Context, in ImportInput) (ImportResult, e
 			if row.Decision == "skip" {
 				continue
 			}
-			o, err := importOperation(in.AccountID, row)
-			if err != nil {
-				return err
-			}
-			id, err := insertOperation(ctx, tx, o, out.ID, row.SourcePage, row.RowNumber)
-			if err != nil {
-				return err
-			}
-			if _, err = tx.ExecContext(ctx, `INSERT INTO import_rows(import_id,source_page,row_number,date,amount_minor,description_key,transaction_id) VALUES(?,?,?,?,?,?,?)`,
-				out.ID, row.SourcePage, row.RowNumber, row.Date, row.AmountMinor, descriptionKey(row.Description), id); err != nil {
-				return err
+			for partIndex, child := range operationRows(row) {
+				_ = partIndex
+				o, err := importOperation(in.AccountID, child)
+				if err != nil {
+					return err
+				}
+				id, err := insertOperation(ctx, tx, o, out.ID, row.SourcePage, row.RowNumber)
+				if err != nil {
+					return err
+				}
+				if _, err = tx.ExecContext(ctx, `INSERT INTO import_rows(import_id,source_page,row_number,date,amount_minor,description_key,transaction_id,part_index) VALUES(?,?,?,?,?,?,?,?)`,
+					out.ID, row.SourcePage, row.RowNumber, row.Date, row.AmountMinor, descriptionKey(row.Description), id, partIndex); err != nil {
+					return err
+				}
 			}
 		}
 		return nil

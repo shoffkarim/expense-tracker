@@ -8,9 +8,9 @@ export type Screen = { month: string; totalBalanceMinor: number; accounts: Accou
 export type OperationInput = { tags?: string[]; kind: Kind; date: string; amountMinor: number; sourceAccountId?: number; destinationAccountId?: number; categoryId?: number; description: string; comment: string };
 export type Operation = OperationInput & { id: number; importId?: number; sourcePage?: number; rowNumber?: number };
 export type History = { transactions: Operation[]; total: number; page: number; pageSize: number };
-export type ImportRow = Transaction & { ruleName?: string; tags?: string[]; categoryId?: number; otherAccountId?: number; comment: string; decision: 'save' | 'skip' | 'keep'; matchToken?: string };
+export type ImportRow = Transaction & { parts?: ImportRow[]; localId?: string; amountText?: string; amountError?: string; ruleName?: string; tags?: string[]; categoryId?: number; otherAccountId?: number; comment: string; decision: 'save' | 'skip' | 'keep'; matchToken?: string };
 export type Draft = { id: string; fileName: string; fileHash: string; warnings: ParseWarning[]; rows: (ImportRow & { statementNumber: number; amountText?: string; amountError?: string })[] };
-export type ImportPayload = { accountId: number; fileHash: string; requestKey?: string; rows: ImportRow[] };
+export type ImportPayload = { accountId: number; fileHash: string; requestKey?: string; rows: (Omit<ImportRow, "parts"> & { parts?: Pick<ImportRow, "amountMinor" | "categoryId" | "otherAccountId" | "tags" | "comment">[] })[] };
 export type ImportCheck = { alreadyImported: boolean; rows: { matches: { transactionId?: number; relatedRows?: { sourcePage: number; rowNumber: number }[]; reason: string }[]; matchToken: string }[] };
 export type ImportResult = { id: number; saved: number; skipped: number };
 
