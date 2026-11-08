@@ -329,3 +329,14 @@ fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 .sortable-card { cursor: grab; touch-action: manipulation; }
 .sortable-card.is-sorting { cursor: grabbing; opacity: .65; outline: 2px solid #658c73; }
 .sortable-card:focus-visible { outline: 2px solid #28543f; outline-offset: 3px; }
+
+.icon-picker-trigger { display: flex; align-items: center; gap: 16px; padding: 10px 14px; background: white; border: 1px solid #ccd7c6; border-radius: 10px; }
+.icon-picker-panel { position: fixed; z-index: 20; width: min(280px, calc(100vw - 24px)); padding: 10px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; background: #fafcf7; border: 1px solid #ccd7c6; border-radius: 12px; box-shadow: 0 8px 24px #152c3326; }
+.icon-picker-panel input { width: 100%; flex-shrink: 0; }
+.icon-picker-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 3px; overflow-y: auto; min-height: 0; }
+.icon-picker-grid button { display: grid; place-items: center; min-width: 0; height: 38px; padding: 6px; background: transparent; border: 2px solid transparent; border-radius: 8px; }
+.icon-picker-grid button:hover { background: #eaf0e5; }
+.icon-picker-grid button[aria-pressed="true"] { border-color: #658c73; background: #eaf0e5; }
+.icon-picker-grid button:focus-visible { outline: 2px solid #20332d; outline-offset: -2px; }
+.icon-picker-grid svg { width: 23px; height: 23px; }
+.icon-picker-panel p { margin: 8px 0; font-size: 14px; }

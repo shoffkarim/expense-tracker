@@ -619,3 +619,28 @@ test('dashboard positions affect cards but preserve account choices', async () =
   const choices = [...document.querySelectorAll('select option')].map(el=>el.textContent);
   assert.ok(choices.indexOf('Карта') < choices.indexOf('Наличные'));
 });
+
+test('icon picker filters, selects and resets search without submitting', async () => {
+  const { IconPicker } = await import('../src/IconPicker.tsx');
+  const { iconCatalog } = await import('../src/icons.ts');
+  const { readFileSync } = await import('node:fs');
+  const server = readFileSync(new URL('../../backend/store.go', import.meta.url), 'utf8');
+  assert.equal(iconCatalog.length, 64);
+  assert.equal(new Set(iconCatalog.map(item => item.id)).size, 64);
+  for (const item of iconCatalog) assert.ok(server.includes(`"${item.id}": true`));
+  let selected;
+  await render(h(IconPicker, { value: 'wallet', color: '#658c73', onChange: value => { selected = value; } }));
+  await click(document.querySelector('.icon-picker-trigger'));
+  await change(document.querySelector('[aria-label="Поиск иконки"]'), 'КОШЕЛЕК');
+  assert.equal(document.querySelectorAll('.icon-picker-grid button').length, 1);
+  await change(document.querySelector('[aria-label="Поиск иконки"]'), ' piggy ');
+  await click(document.querySelector('.icon-picker-grid button'));
+  assert.equal(selected, 'piggybank');
+  assert.equal(document.querySelector('.icon-picker-panel'), null);
+  await click(document.querySelector('.icon-picker-trigger'));
+  assert.equal(document.querySelectorAll('.icon-picker-grid button').length, 64);
+  await change(document.querySelector('[aria-label="Поиск иконки"]'), 'несуществующее');
+  assert.equal(document.querySelector('[role="status"]').textContent, 'Иконки не найдены');
+  await key(document.querySelector('[aria-label="Поиск иконки"]'), 'Escape');
+  assert.equal(document.querySelector('.icon-picker-panel'), null);
+});

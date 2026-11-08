@@ -191,7 +191,7 @@ type Screen struct {
 }
 
 var colorPattern = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
-var icons = map[string]bool{"wallet": true, "bank": true, "card": true, "cash": true, "food": true, "home": true, "car": true, "health": true, "other": true, "work": true, "chart": true, "gift": true, "travel": true, "shopping": true, "coffee": true, "education": true}
+var icons = map[string]bool{"wallet": true, "bank": true, "card": true, "cash": true, "food": true, "home": true, "car": true, "health": true, "other": true, "work": true, "chart": true, "gift": true, "travel": true, "shopping": true, "coffee": true, "education": true, "piggybank": true, "coins": true, "receipt": true, "calculator": true, "shoppingcart": true, "store": true, "apple": true, "pizza": true, "cake": true, "icecreambowl": true, "fish": true, "beef": true, "milk": true, "wine": true, "bus": true, "trainfront": true, "bike": true, "fuel": true, "ship": true, "taxi": true, "bed": true, "sofa": true, "lamp": true, "refrigerator": true, "washingmachine": true, "wrench": true, "hammer": true, "plug": true, "droplets": true, "flame": true, "wifi": true, "phone": true, "laptop": true, "monitor": true, "tv": true, "camera": true, "headphones": true, "music": true, "gamepad2": true, "film": true, "bookopen": true, "dumbbell": true, "pill": true, "stethoscope": true, "pawprint": true, "baby": true, "shirt": true, "scissors": true}
 
 func validAppearance(name, color, icon string) error {
 	if strings.TrimSpace(name) == "" || utf8.RuneCountInString(name) > 80 {
