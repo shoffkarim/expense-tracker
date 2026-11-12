@@ -1,11 +1,12 @@
 import { iconCatalog } from './icons';
 import { IconPicker } from './IconPicker';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
+import { Alert, Modal as MantineModal, ColorSwatch, ThemeIcon } from '@mantine/core';
 
 export const palette = ['#c87946', '#658c73', '#627eaa', '#b66a7e', '#8c7aa9', '#b69a48', '#528e91', '#626866'];
-export function Icon({ name, color }: { name: string; color?: string }) {
+export function Icon({ name, color, size = 40 }: { name: string; color?: string; size?: number }) {
   const Glyph = (iconCatalog.find(item => item.id === name) || iconCatalog.find(item => item.id === 'other')!).component;
-  return <span className="tile-icon" style={color ? { color, backgroundColor: `${color}18` } : undefined}><Glyph strokeWidth={1.6} aria-hidden="true" /></span>;
+  return <ThemeIcon className="tile-icon" variant="light" color={color} size={size}><Glyph strokeWidth={1.6} aria-hidden="true" /></ThemeIcon>;
 }
 const rubles = new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 2 });
 export function money(minor: number) {
@@ -48,15 +49,11 @@ export function parseMoneyInput(raw: string, allowNegative = false): number {
 export const dateLabel = (iso: string) => iso.split('-').reverse().join('.');
 export function today() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 export const message = (error: unknown) => error instanceof Error ? error.message : 'Не удалось выполнить операцию.';
-export function ErrorNotice({ error }: { error: string }) { return error ? <div className="error-panel" role="alert">{error}</div> : null; }
+export function ErrorNotice({ error }: { error: string }) { return error ? <Alert color="red" role="alert" my="sm">{error}</Alert> : null; }
 export function Modal({ title, children, onClose, busy = false }: { title: string; children: ReactNode; onClose: () => void; busy?: boolean }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => { const node = dialog.current; node?.showModal(); return () => node?.close(); }, []);
-  return <dialog className="modal" ref={dialog} aria-labelledby="dialog-title" onCancel={e => { e.preventDefault(); if (!busy) onClose(); }}>
-    <div className="modal-heading"><h2 id="dialog-title">{title}</h2><button type="button" className="icon-button" aria-label="Закрыть" disabled={busy} onClick={onClose}>×</button></div>{children}
-  </dialog>;
+  return <MantineModal opened title={title} onClose={() => { if (!busy) onClose(); }} closeOnEscape={!busy} closeOnClickOutside={false} closeButtonProps={{ disabled: busy, 'aria-label': 'Закрыть' }} returnFocus size="lg">{children}</MantineModal>;
 }
-export function Appearance({ color, icon, onColor, onIcon }: { color: string; icon: string; onColor: (v: string) => void; onIcon: (v: string) => void }) {
-  return <><div className="field"><span>Цвет</span><div className="palette">{[...new Set([...palette, color])].map(c => <button key={c} type="button" className={`swatch ${color === c ? 'selected' : ''}`} style={{ background: c }} aria-label={`Цвет ${c}`} aria-pressed={color === c} onClick={() => onColor(c)} />)}</div></div>
-    <div className="field"><span>Иконка</span><IconPicker value={icon} color={color} onChange={onIcon} /></div></>;
+export function Appearance({ color, icon, onColor, onIcon, disabled = false }: { disabled?: boolean; color: string; icon: string; onColor: (v: string) => void; onIcon: (v: string) => void }) {
+  return <><div className="field"><span>Цвет</span><div className="palette">{[...new Set([...palette, color])].map(c => <ColorSwatch disabled={disabled} component="button" color={c} key={c} type="button" className={`swatch ${color === c ? 'selected' : ''}`}  aria-label={`Цвет ${c}`} aria-pressed={color === c} onClick={() => onColor(c)} />)}</div></div>
+    <div className="field"><span>Иконка</span><IconPicker disabled={disabled} value={icon} color={color} onChange={onIcon} /></div></>;
 }

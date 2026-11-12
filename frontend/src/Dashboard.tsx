@@ -1,3 +1,4 @@
+import { ActionIcon, Title, Button } from '@mantine/core';
 import { SortableGroup, SortableCard } from './Sortable';
 import { api } from './api';
 import { ErrorNotice, message } from './ui';
@@ -32,25 +33,25 @@ export function Dashboard({ screen, onChanged }: { screen: Screen; onChanged: (n
   const monthLabel = new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' }).format(new Date(`${screen.month}-01T12:00:00`));
   return <><ErrorNotice error={error}/>
     <section className="overview-hero">
-      <div><p className="eyebrow">Ваши деньги, перед глазами</p><h1>Обзор финансов</h1><p className="intro-copy">Счета — на сегодня. Доходы и расходы — за месяц.</p></div>
-      <button className="primary-button" disabled={!accounts.length} onClick={() => setEditor({ type: 'operation' })}>+ Добавить операцию</button>
+      <div><p className="eyebrow">Ваши деньги, перед глазами</p><Title order={1}>Обзор финансов</Title><p className="intro-copy">Счета — на сегодня. Доходы и расходы — за месяц.</p></div>
+      <Button type="button" className="primary-button" disabled={!accounts.length} onClick={() => setEditor({ type: 'operation' })}>+ Добавить операцию</Button>
     </section>
     <section className="balance-banner" aria-label="Общий баланс">
       <div><p>Общий баланс</p><strong>{money(screen.totalBalanceMinor)}</strong><span>На всех активных счетах · за всё время</span></div>
       <span className="balance-decoration" aria-hidden="true">₽</span>
     </section>
     <section className="dashboard-section" aria-labelledby="accounts-title">
-      <div className="section-heading"><div><h2 id="accounts-title">Счета <span className="count">{accounts.length}</span></h2><p>Остатки не зависят от выбранного месяца</p></div><button className="text-button" onClick={() => setEditor({ type: 'account' })}>+ Новый счёт</button></div>
+      <div className="section-heading"><div><Title order={2} id="accounts-title">Счета <span className="count">{accounts.length}</span></Title><p>Остатки не зависят от выбранного месяца</p></div><Button type="button" variant="subtle" className="text-button" onClick={() => setEditor({ type: 'account' })}>+ Новый счёт</Button></div>
       {accounts.length ? <SortableGroup ids={accounts.map(a=>a.id)} disabled={saving} onMove={(from,to)=>void reorder("accounts",from,to)}><div className="account-grid">{accounts.map((a,index) => <SortableCard key={a.id} id={a.id} index={index} disabled={saving} className="account-card">
-        <div className="card-top"><Icon name={a.icon} color={a.color} /><button className="icon-button card-edit" aria-label={`Редактировать счёт ${a.name}`} onClick={() => setEditor({ type: 'account', value: a })}>···</button></div><a draggable={false} className="card-name card-link" href={`#/history?accountId=${a.id}`} aria-label={`Операции по счёту ${a.name}`}>{a.name}</a><strong>{money(a.balanceMinor)}</strong>
-      </SortableCard>)}</div></SortableGroup> : <div className="empty-result"><Icon name="wallet" color="#658c73" /><h3>Начните с первого счёта</h3><p>Добавьте карту или кошелёк и укажите начальный остаток.</p><button className="primary-button" onClick={() => setEditor({ type: 'account' })}>Создать счёт</button></div>}
+        <div className="card-top"><Icon name={a.icon} color={a.color} /><ActionIcon type="button" variant="subtle" className="icon-button card-edit" aria-label={`Редактировать счёт ${a.name}`} onClick={() => setEditor({ type: 'account', value: a })}>···</ActionIcon></div><a draggable={false} className="card-name card-link" href={`#/history?accountId=${a.id}`} aria-label={`Операции по счёту ${a.name}`}>{a.name}</a><strong>{money(a.balanceMinor)}</strong>
+      </SortableCard>)}</div></SortableGroup> : <div className="empty-result"><Icon name="wallet" color="#658c73" /><Title order={3}>Начните с первого счёта</Title><p>Добавьте карту или кошелёк и укажите начальный остаток.</p><Button type="button" className="primary-button" onClick={() => setEditor({ type: 'account' })}>Создать счёт</Button></div>}
     </section>
     {(['expense', 'income'] as const).map(kind => {
       const categories = sorted(screen.categories,kind).filter(c => c.kind === kind && (!c.archived || c.amountMinor !== 0));
       return <section className="dashboard-section" key={kind} aria-labelledby={`${kind}-title`}>
-        <div className="section-heading"><div><h2 id={`${kind}-title`}>{kind === 'expense' ? 'Расходы' : 'Доходы'}</h2><p className="month-label">{monthLabel}</p></div><button className="text-button" onClick={() => setEditor({ type: 'category', kind })}>+ Категория</button></div>
+        <div className="section-heading"><div><Title order={2} id={`${kind}-title`}>{kind === 'expense' ? 'Расходы' : 'Доходы'}</Title><p className="month-label">{monthLabel}</p></div><Button type="button" variant="subtle" className="text-button" onClick={() => setEditor({ type: 'category', kind })}>+ Категория</Button></div>
         <SortableGroup ids={categories.map(c=>c.id)} disabled={saving} onMove={(from,to)=>void reorder(kind,from,to)}><div className="category-grid">{categories.map((c,index) => <SortableCard id={c.id} index={index} disabled={saving} key={c.id} className={`category-card ${c.archived ? 'archived' : ''}`}>
-          <div className="card-top"><Icon name={c.icon} color={c.color} />{!c.archived && <button className="icon-button edit-category card-edit" aria-label={`Редактировать категорию ${c.name}`} onClick={() => setEditor({ type: 'category', kind, value: c })}>···</button>}</div>
+          <div className="card-top"><Icon name={c.icon} color={c.color} />{!c.archived && <ActionIcon type="button" variant="subtle" className="icon-button edit-category card-edit" aria-label={`Редактировать категорию ${c.name}`} onClick={() => setEditor({ type: 'category', kind, value: c })}>···</ActionIcon>}</div>
           <a draggable={false} className="card-name card-link" href={`#/history?categoryId=${c.id}`} aria-label={`Операции по категории ${c.name}`}>{c.name}{c.archived && <small>В архиве</small>}</a><strong>{money(c.amountMinor)}</strong>
         </SortableCard>)}</div></SortableGroup>
         {!categories.length && <p className="muted">Категорий пока нет. Добавьте первую.</p>}

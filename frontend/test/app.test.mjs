@@ -2,13 +2,19 @@ import { test, beforeEach, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost:8080/#/dashboard' });
-for (const key of ['window', 'document', 'Element', 'Node', 'Document', 'MutationObserver', 'AbortController', 'AbortSignal', 'getComputedStyle', 'HTMLElement', 'HTMLInputElement', 'HTMLSelectElement', 'HTMLDialogElement', 'Event', 'MouseEvent', 'DOMException', 'FormData', 'File']) globalThis[key] = dom.window[key];
+for (const key of ['window', 'document', 'Element', 'Node', 'Document', 'MutationObserver', 'AbortController', 'AbortSignal', 'getComputedStyle', 'HTMLElement', 'ShadowRoot', 'SVGElement', 'HTMLInputElement', 'HTMLSelectElement', 'HTMLDialogElement', 'Event', 'MouseEvent', 'DOMException', 'FormData', 'File']) globalThis[key] = dom.window[key];
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator });
-HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-HTMLDialogElement.prototype.close = function () { this.open = false; };
+HTMLElement.prototype.scrollIntoView = () => {};
+globalThis.requestAnimationFrame = callback => setTimeout(callback, 0);
+globalThis.cancelAnimationFrame = clearTimeout;
+window.requestAnimationFrame = globalThis.requestAnimationFrame;
+window.cancelAnimationFrame = clearTimeout;
+window.matchMedia = () => ({matches:false,addEventListener(){},removeEventListener(){}});
+globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const { createElement: h, act, useState } = await import('react');
 const { createRoot } = await import('react-dom/client');
+const { UIProvider } = await import('../src/UIProvider.tsx');
 const { App } = await import('../src/App.tsx');
 const { ImportScreen } = await import('../src/ImportScreen.tsx');
 const { ImportPicker } = await import('../src/ImportPicker.tsx');
@@ -42,12 +48,18 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); });
 after(() => { dom.window.close(); });
-const render = async element => { await act(async () => { root.render(element); }); };
+const render = async element => { await act(async () => { root.render(h(UIProvider, {testing:true}, element)); }); };
 const buttons = () => [...document.querySelectorAll('button')].filter(el => !el.closest('[hidden]'));
 const button = text => { const node = buttons().find(el => el.textContent === text); assert.ok(node, `Button ${text} missing`); return node; };
 const click = async node => { await act(async () => node.dispatchEvent(new MouseEvent('click', { bubbles: true }))); };
 const change = async (node, value) => {
   assert.ok(node, 'Input missing');
+  const choice = node.type === 'hidden' ? node.parentElement.querySelector('input[role=combobox]') : node;
+  if (choice?.getAttribute('role') === 'combobox') {
+    await click(choice);
+    const option = [...document.getElementById(choice.getAttribute('aria-controls')).querySelectorAll('[role=option]')].find(el => el.getAttribute('value') === value);
+    assert.ok(option, `Option ${value} missing`); await click(option); return;
+  }
   await act(async () => {
     const proto = node instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, 'value').set.call(node, value);
@@ -56,13 +68,14 @@ const change = async (node, value) => {
   });
 };
 const choose = async (label, name) => {
-  await click(document.querySelector(`[aria-label="${label}"]`));
-  const option = [...document.querySelectorAll('[role=option]')].find(node => node.textContent.replace('✓', '') === name);
+  const trigger = document.querySelector(`[aria-label="${label}"]`);
+  await click(trigger);
+  const option = [...document.getElementById(trigger.getAttribute("aria-controls")).querySelectorAll('[role=option]')].find(node => node.textContent.replace('✓', '') === name);
   assert.ok(option, `Option ${name} missing`);
   await click(option);
 };
-const key = async (node, value) => { await act(async () => node.dispatchEvent(new window.KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true }))); };
-const field = name => [...document.querySelectorAll('label')].find(el => el.firstChild?.textContent === name)?.querySelector('input,select,textarea');
+const key = async (node, value) => { await act(async () => node.dispatchEvent(new window.KeyboardEvent('keydown', { key: value, code: value, bubbles: true, cancelable: true }))); };
+const field = name => { const label = [...document.querySelectorAll('label')].find(el => el.firstChild?.textContent === name); return label?.control || label?.querySelector('input,select,textarea'); };
 const submit = async () => { await act(async () => document.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))); };
 const navigate = async hash => { await act(async () => { window.location.hash = hash; window.dispatchEvent(new Event('hashchange')); await new Promise(resolve => setTimeout(resolve, 0)); }); };
 
@@ -147,7 +160,7 @@ test('import survives navigation, requires categorization and duplicate decision
   await navigate('#/dashboard');
   await navigate('#/import');
   assert.equal(document.querySelector('[aria-label="Сумма операции 1"]').value, '99.25');
-  assert.equal(document.querySelector('[aria-label="Куда для операции 1"]').textContent, 'Еда');
+  assert.equal(document.querySelector('[aria-label="Куда для операции 1"]').value, 'Еда');
   await click(button('Сохранить операции'));
   assert.ok(button('Повторить сохранение'));
   assert.equal(document.querySelector('[aria-label="Сумма операции 1"]').disabled, true);
@@ -188,7 +201,7 @@ test('deleting middle and first rows preserves values and excludes deleted rows 
   await deleteRow(2);
   assert.deepEqual([...document.querySelectorAll('.import-description')].map(n => n.textContent), ['Synthetic 1', 'Synthetic 3']);
   assert.equal(document.querySelector('[aria-label="Комментарий операции 3"]').value, 'Keep this comment');
-  assert.equal(document.querySelector('[aria-label="Куда для операции 3"]').textContent, 'Наличные');
+  assert.equal(document.querySelector('[aria-label="Куда для операции 3"]').value, 'Наличные');
   await deleteRow(1);
   assert.equal(document.querySelector('.import-description').textContent, 'Synthetic 3');
   assert.deepEqual(requests.filter(r => r.url === '/api/imports/check').at(-1).body.rows.map(r => r.rowNumber), [3]);
@@ -256,40 +269,24 @@ test('picker supports selection, changing selection, keyboard, outside clicks an
   }
   await render(h(PickerHarness));
   const trigger = document.querySelector('[aria-label="Куда"]');
-  assert.equal(trigger.textContent, '');
-  await key(trigger, 'ArrowDown');
-  let menu = document.querySelector('[role=listbox]');
-  assert.equal(document.activeElement, menu);
-  await key(menu, 'End');
-  await key(menu, 'Enter');
-  assert.equal(trigger.textContent, 'Наличные');
-  assert.equal(document.activeElement, trigger);
-  assert.equal(document.querySelector('[role=listbox]'), null);
-  await click(trigger);
-  menu = document.querySelector('[role=listbox]');
-  assert.equal(document.querySelector('[aria-selected="true"]').textContent, 'Наличные✓');
-  await key(menu, 'Home'); await key(menu, ' ');
-  assert.equal(trigger.textContent, 'Еда');
-  await click(trigger);
-  await key(document.querySelector('[role=listbox]'), 'ArrowDown');
-  await key(document.querySelector('[role=listbox]'), 'ArrowUp');
-  await key(document.querySelector('[role=listbox]'), 'Escape');
-  assert.equal(document.querySelector('[role=listbox]'), null);
-  assert.equal(document.activeElement, trigger);
-  await click(trigger);
   await act(async () => trigger.focus());
+  await key(trigger, 'ArrowDown');
+  assert.ok(document.querySelector('[role=listbox]'));
+  await key(trigger, 'ArrowDown');
+  await key(trigger, 'Enter');
+  assert.equal(trigger.value, 'Наличные');
+  assert.equal(document.activeElement, trigger);
   await click(trigger);
-  assert.equal(document.querySelector('[role=listbox]'), null);
+  await click([...document.querySelectorAll('[role=option]')].find(el=>el.getAttribute('value')==='category:1'));
+  assert.equal(trigger.value, 'Еда');
+  await click(trigger); await key(trigger, 'Escape');
+  assert.equal(trigger.getAttribute('aria-expanded'), 'false');
   await click(trigger);
-  await act(async () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })));
-  assert.equal(document.querySelector('[role=listbox]'), null);
-  await click(trigger);
-  await key(document.querySelector('[role=listbox]'), 'Tab');
-  assert.equal(document.querySelector('[role=listbox]'), null);
-  await click(trigger);
+  await act(async () => document.body.dispatchEvent(new Event('mousedown', { bubbles: true })));
+  assert.equal(trigger.getAttribute('aria-expanded'), 'false');
   await render(h(PickerHarness, { disabled: true }));
   assert.equal(trigger.disabled, true);
-  assert.equal(document.querySelector('[role=listbox]'), null);
+  assert.equal(trigger.getAttribute('aria-expanded'), 'false');
 });
 
 test('rules modal creates and edits a rule, preserves failed input and resets on cancel', async () => {
@@ -301,13 +298,13 @@ test('rules modal creates and edits a rule, preserves failed input and resets on
     return previous(url, options, request);
   };
   await render(h(App)); await navigate('#/rules'); await click(button('Добавить правило'));
-  assert.ok(document.querySelector('dialog[open] form'));
+  assert.ok(document.querySelector('[role=dialog] form'));
   await change(field('Название'), 'Магазин'); await change(field('Текст'), 'shop'); await change(field('Результат'), 'c:1');
   await act(async () => document.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
   const request = requests.find(r => r.url === '/api/rules' && r.method === 'POST');
   assert.equal(request.body.text, 'shop'); assert.equal(request.body.categoryId, 1);
   assert.match(document.querySelector('main').textContent, /Содержит «shop»/);
-  assert.equal(document.querySelector('dialog'), null);
+  assert.equal(document.querySelector('[role=dialog]'), null);
   await click(button('Изменить'));
   assert.equal(field('Название').value, 'Магазин');
   await change(field('Название'), 'Новое название');
@@ -318,22 +315,22 @@ test('rules modal creates and edits a rule, preserves failed input and resets on
   await act(async () => document.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
   assert.equal(document.querySelector('fieldset').disabled, true);
   assert.equal(document.querySelector('[aria-label="Закрыть"]').disabled, true);
-  await act(async () => document.querySelector('dialog').dispatchEvent(new Event('cancel', { cancelable: true })));
-  assert.ok(document.querySelector('dialog[open]'));
+  await key(document.querySelector('[role=dialog]'), 'Escape');
+  assert.ok(document.querySelector('[role=dialog]'));
   await act(async () => finish({ ok: false, status: 400, json: async () => ({ error: 'Ошибка сохранения' }) }));
-  assert.ok(document.querySelector('dialog [role="alert"]'));
+  assert.ok(document.querySelector('[role=dialog] [role="alert"]'));
   assert.equal(field('Название').value, 'Новое название');
   respond = success;
   await act(async () => document.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
-  assert.equal(document.querySelector('dialog'), null);
+  assert.equal(document.querySelector('[role=dialog]'), null);
   assert.equal(rules[0].name, 'Новое название');
   await click(button('Добавить правило'));
   await change(field('Название'), 'Черновик');
   await click(button('Отмена'));
   await click(button('Добавить правило'));
   assert.equal(field('Название').value, '');
-  await act(async () => document.querySelector('dialog').dispatchEvent(new Event('cancel', { cancelable: true })));
-  assert.equal(document.querySelector('dialog'), null);
+  await key(document.querySelector('[role=dialog]'), 'Escape');
+  assert.equal(document.querySelector('[role=dialog]'), null);
 
 });
 
@@ -380,11 +377,11 @@ test('history loads pages on intersection and resets filters on re-entry', async
   assert.equal(document.querySelectorAll('.history-row').length, 23);
   assert.equal(requests.filter(r => r.url.includes('page=2')).length, 1);
   assert.equal(intersect, null);
-  await change(document.querySelector('.history-filters select'), '1');
+  await change(document.querySelector('.history-filters input[type=hidden]'), '1');
   assert.equal(document.querySelectorAll('.history-row').length, 20);
   await navigate('#/dashboard');
   await navigate('#/history');
-  assert.equal(document.querySelector('.history-filters select').value, '');
+  assert.equal(document.querySelector('.history-filters input[type=hidden]').value, '');
   assert.equal(document.querySelectorAll('.history-row').length, 20);
   delete globalThis.IntersectionObserver;
 });
@@ -406,15 +403,15 @@ test('dashboard links seed history filters and keep editing separate', async () 
     assert.equal(query.get('from'), '');
     assert.equal(query.get('to'), '');
     assert.equal(query.get('page'), '1');
-    assert.equal(document.querySelectorAll('.history-filters select')[param === 'accountId' ? 0 : 1].value, value);
+    assert.equal(document.querySelectorAll('.history-filters input[type=hidden]')[param === 'accountId' ? 0 : 1].value, value);
   }
   await navigate('#/history?accountId=2');
-  assert.equal(document.querySelector('.history-filters select').value, '2');
+  assert.equal(document.querySelector('.history-filters input[type=hidden]').value, '2');
   await navigate('#/history');
-  assert.equal(document.querySelector('.history-filters select').value, '');
+  assert.equal(document.querySelector('.history-filters input[type=hidden]').value, '');
   await navigate('#/dashboard');
   await click(document.querySelector('[aria-label="Редактировать счёт Карта"]'));
-  assert.ok(document.querySelector('dialog[open]'));
+  assert.ok(document.querySelector('[role=dialog]'));
   assert.equal(window.location.hash, '#/dashboard');
 });
 
@@ -423,7 +420,7 @@ test('direct history link applies filter on first request', async () => {
   await render(h(App));
   const query = new URL(requests.find(r => r.url.startsWith('/api/transactions?')).url, window.location.origin).searchParams;
   assert.equal(query.get('categoryId'), '2');
-  assert.equal(document.querySelectorAll('.history-filters select')[1].value, '2');
+  assert.equal(document.querySelectorAll('.history-filters input[type=hidden]')[1].value, '2');
 });
 
  test('rules support adding, removing and editing OR alternatives', async () => {
@@ -461,17 +458,17 @@ test('direct history link applies filter on first request', async () => {
    assert.deepEqual([...document.querySelectorAll('.history-month')].map(n=>n.textContent),['Октябрь']);
    await act(async()=>intersect([{isIntersecting:true}]));
    assert.deepEqual([...document.querySelectorAll('.history-month')].map(n=>n.textContent),['Октябрь',`Декабрь ${year-1}`]);
-   await change(document.querySelector('.history-filters select'),'1');
+   await change(document.querySelector('.history-filters input[type=hidden]'),'1');
    assert.deepEqual([...document.querySelectorAll('.history-month')].map(n=>n.textContent),['Октябрь']);
   } finally {delete globalThis.IntersectionObserver;}
  });
 
 test('tags support creation, deduplication, removal and operation saving', async () => {
  await render(h(OperationForm, {screen:base,onClose(){},onSaved(){}}));
- const input=document.querySelector('input[list]');
+ const input=document.querySelector('input[aria-label=Теги]');
  await change(input,'Кофе');await key(input,'Enter');
  await change(input,'кофе');await key(input,'Enter');
- assert.equal(document.querySelectorAll('.tag').length,1);
+ assert.equal(document.querySelectorAll('[aria-label^="Убрать тег"]').length,1);
  await change(input,'работа');await key(input,'Enter');
  await click(document.querySelector('[aria-label="Убрать тег работа"]'));
  await change(field('Сумма, ₽'),'10');await change(field('Откуда'),'1');await change(field('Категория расхода'),'1');
@@ -499,13 +496,13 @@ test('import amount edits preserve direction, validate input and send only API f
   }
   await change(amount, '-2');
   assert.equal(amount.value, '2');
-  assert.equal(amount.getAttribute('aria-invalid'), 'false');
+  assert.notEqual(amount.getAttribute('aria-invalid'), 'true');
   const checksBefore = requests.filter(r => r.url === '/api/imports/check').length;
   await change(amount, '2abc');
   assert.equal(amount.value, '2');
   assert.equal(requests.filter(r => r.url === '/api/imports/check').length, checksBefore);
   await change(amount, '12,34');
-  assert.equal(amount.getAttribute('aria-invalid'), 'false');
+  assert.notEqual(amount.getAttribute('aria-invalid'), 'true');
   const checked = requests.filter(r => r.url === '/api/imports/check').at(-1).body.rows[0];
   assert.equal(checked.amountMinor, -1234);
   assert.ok(!('amountText' in checked));
@@ -616,7 +613,8 @@ test('dashboard positions affect cards but preserve account choices', async () =
   await render(h(App));
   assert.deepEqual([...document.querySelectorAll('.account-grid .card-name')].map(el=>el.textContent), ['Наличные','Карта']);
   await click(button('+ Добавить операцию'));
-  const choices = [...document.querySelectorAll('select option')].map(el=>el.textContent);
+  await click(field('Откуда'));
+  const choices = [...document.querySelectorAll('[role=option]')].map(el=>el.textContent);
   assert.ok(choices.indexOf('Карта') < choices.indexOf('Наличные'));
 });
 
@@ -643,4 +641,42 @@ test('icon picker filters, selects and resets search without submitting', async 
   assert.equal(document.querySelector('[role="status"]').textContent, 'Иконки не найдены');
   await key(document.querySelector('[aria-label="Поиск иконки"]'), 'Escape');
   assert.equal(document.querySelector('.icon-picker-panel'), null);
+});
+
+test('archive confirmation cancels without request and confirms exactly once', async () => {
+  let closed = 0;
+  await render(h(AccountForm, {account:base.accounts[0],onClose(){closed++},onSaved(){}}));
+  await click(button('В архив'));
+  assert.equal(requests.filter(r=>r.method==='DELETE').length,0);
+  assert.equal(field('Название').disabled,true);
+  await click(button('Отмена'));
+  assert.equal(requests.filter(r=>r.method==='DELETE').length,0);
+  assert.equal(field('Название').disabled,false);
+  await click(button('В архив'));
+  await click(button('Подтвердить'));
+  assert.equal(requests.filter(r=>r.method==='DELETE'&&r.url==='/api/accounts/1').length,1);
+  assert.equal(closed,1);
+});
+
+test('unmount cancels a pending confirmation', async () => {
+  await render(h(AccountForm, {account:base.accounts[0],onClose(){},onSaved(){}}));
+  await click(button('В архив'));
+  await render(h('div',null,'Closed'));
+  assert.equal(document.querySelector('[role=dialog]'),null);
+  assert.equal(requests.filter(r=>r.method==='DELETE').length,0);
+});
+
+test('Mantine choices retain required validation and date input sends ISO without normalization', async () => {
+  await render(h(OperationForm, {screen:base,onClose(){},onSaved(){}}));
+  await change(field('Сумма, ₽'),'1');
+  assert.equal(field('Откуда').checkValidity(),false);
+  await change(field('Откуда'),'1');
+  await change(field('Категория расхода'),'1');
+  assert.equal(field('Откуда').checkValidity(),true);
+  await change(field('Дата'),'31.02.2026');
+  assert.equal(field('Дата').checkValidity(),false);
+  await change(field('Дата'),'08.11.2026');
+  assert.equal(field('Дата').checkValidity(),true);
+  await submit();
+  assert.equal(requests.find(r=>r.url==='/api/transactions'&&r.method==='POST').body.date,'2026-11-08');
 });

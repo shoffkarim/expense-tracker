@@ -17,6 +17,11 @@
     "@dnd-kit/dom": "^0.5.3",
     "@dnd-kit/helpers": "^0.5.3",
     "@dnd-kit/react": "^0.5.3",
+    "@mantine/core": "9.5.2",
+    "@mantine/dates": "9.5.2",
+    "@mantine/dropzone": "9.5.2",
+    "@mantine/hooks": "9.5.2",
+    "dayjs": "^1.11.23",
     "lucide-react": "^1.70.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"

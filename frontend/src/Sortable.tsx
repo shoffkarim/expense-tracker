@@ -1,3 +1,4 @@
+import { Paper } from '@mantine/core';
 import { isSortable } from '@dnd-kit/dom/sortable';
 import { useRef, type ReactNode } from 'react';
 import { DragDropProvider } from '@dnd-kit/react';
@@ -21,5 +22,5 @@ export function SortableGroup({ children, ids, onMove, disabled = false }: { chi
 }
 export function SortableCard({ id, index, disabled, className, children }: { id: number; index: number; disabled?: boolean; className: string; children: ReactNode }) {
  const {ref,isDragging} = useSortable({id,index,disabled});
- return <article ref={ref} tabIndex={0} className={`${className} sortable-card ${isDragging ? 'is-sorting' : ''}`} aria-label="Переместить: пробел, стрелки, Escape для отмены">{children}</article>;
+ return <Paper component="article" withBorder ref={ref} tabIndex={0} className={`${className} sortable-card ${isDragging ? 'is-sorting' : ''}`} aria-label="Переместить: пробел, стрелки, Escape для отмены">{children}</Paper>;
 }

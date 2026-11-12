@@ -1,3 +1,7 @@
+import { ActionIcon, Group, Paper, TextInput, Button, Checkbox, Title } from '@mantine/core';
+import { Dropzone } from '@mantine/dropzone';
+import { useConfirm } from './Confirm';
+import { Choice } from './Controls';
 import { TagInput } from './Tags';
 import { useEffect, useRef, useState, type ReactNode, type Dispatch, type SetStateAction } from 'react';
 import { api, ApiError, parseStatement, type Draft, type ImportCheck, type ImportPayload, type ImportResult, type ImportRow, type Screen } from './api';
@@ -15,7 +19,8 @@ type CheckedRows = { key: string; alreadyImported: boolean; rows: Record<string,
 
 type Props = { draft: Draft | null; setDraft: Dispatch<SetStateAction<Draft | null>>; active: boolean; revision: number; onChanged: (notice: string) => void };
 export function ImportScreen({ draft, setDraft, active, revision, onChanged }: Props) {
-  const fileInput = useRef<HTMLInputElement>(null);
+ const { confirm, confirming } = useConfirm();
+  const openFile = useRef<() => void>(null);
   const busyRef = useRef(false);
   const draftRef = useRef(draft); draftRef.current = draft;
   const [screen, setScreen] = useState<Screen | null>(null);
@@ -24,7 +29,6 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [dragging, setDragging] = useState(false);
   const [error, setError] = useState('');
   const [dataError, setDataError] = useState('');
   const [checkError, setCheckError] = useState('');
@@ -34,7 +38,7 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
   const [pendingSubmission, setPendingSubmission] = useState<ImportPayload | null>(null);
   const rowsKey = rowSetKey(draft);
   const currentCheck = check?.key === `${accountId}/${rowsKey}` ? check : null;
-  const locked = loading || saving || !!pendingSubmission;
+  const locked = confirming || loading || saving || !!pendingSubmission;
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
@@ -67,13 +71,13 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
     return () => controller.abort();
   }, [rowsKey, accountId, active, revision, retry, checkRetry, pendingSubmission, setDraft]);
 
-  async function upload(files: FileList | null) {
+  async function upload(files: File[] | null) {
     if (busyRef.current || locked || !accountId || !files?.length) return;
     setError('');
     if (files.length !== 1) { setError('Выберите одну PDF-выписку.'); return; }
     const file = files[0];
     if (!file.name.toLowerCase().endsWith('.pdf') || !file.size || file.size > 20 * 1024 * 1024) { setError('Нужен непустой PDF с текстовым слоем, не больше 20 МиБ.'); return; }
-    if (draft && !window.confirm('Заменить текущий черновик новой выпиской? Выбранные категории не сохранятся.')) return;
+    if (draft && !await confirm('Заменить текущий черновик новой выпиской? Выбранные категории не сохранятся.')) return;
     busyRef.current = true; setLoading(true);
     try {
       const result = await parseStatement(file, accountId);
@@ -105,13 +109,13 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
       })
     } : null);
   }
-  function chooseAccount(id: number) {
-    if (draft && accountId && !window.confirm("Сменить счёт и удалить черновик? Потребуется загрузить PDF заново.")) return;
+  async function chooseAccount(id: number) {
+    if (draft && accountId && !await confirm("Сменить счёт и удалить черновик? Потребуется загрузить PDF заново.")) return;
     if (accountId) setDraft(null); setAccountId(id); setCheck(null);
     setDraft(current => current ? { ...current, rows: current.rows.map(row => ({ ...row, otherAccountId: undefined, matchToken: undefined, decision: row.decision === 'skip' ? 'skip' : 'save' })) } : null);
   }
-  function clearDraft() {
-    if (!locked && window.confirm('Очистить черновик? Операции из него ещё не сохранены.')) { setDraft(null); setError(''); setCheck(null); }
+  async function clearDraft() {
+    if (!locked && await confirm('Очистить черновик? Операции из него ещё не сохранены.')) { setDraft(null); setError(''); setCheck(null); }
   }
   const rowReady = (row: ImportRow): boolean => {
     if (row.decision === 'skip') return true;
@@ -148,25 +152,25 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
             ? screen?.categories.some(c => c.id === row.categoryId && c.kind === (row.amountMinor < 0 ? 'expense' : 'income'))
             : row.otherAccountId !== accountId && screen?.accounts.some(a => a.id === row.otherAccountId);
           const direction = row.amountMinor < 0 ? 'Куда' : 'Откуда';
-          return <article key={key} className={`import-row${hasDestination && row.decision !== 'skip' ? ' is-categorized' : ''}`}>
+          return <Paper component="article" withBorder key={key} className={`import-row${hasDestination && row.decision !== 'skip' ? ' is-categorized' : ''}`}>
             <div className="import-row-top"><span className="import-number">№{number}</span><time dateTime={row.date}>{dateLabel(row.date)}</time><label className={`import-amount ${row.amountMinor > 0 ? 'income' : 'expense'}`}>
                 <span aria-hidden="true">{row.amountMinor < 0 ? '−' : '+'}</span>
-                <input type="text" inputMode="decimal" aria-label={`Сумма операции ${number}`}
-                  aria-invalid={!!row.amountError} aria-describedby={row.amountError ? `amount-error-${key}` : undefined}
+                <TextInput type="text" inputMode="decimal" aria-label={`Сумма операции ${number}`}
+                  error={!!row.amountError} aria-describedby={row.amountError ? `amount-error-${key}` : undefined}
                   value={row.amountText ?? moneyInput(Math.abs(row.amountMinor))}
                   disabled={locked || row.amountMinor === 0 || !!row.parts}
                   onChange={e => updateAmount(key, cleanMoneyInput(e.target))} />
                 <span>₽</span>
               </label>
-              {!row.localId && row.amountMinor !== 0 && <button type="button" className="import-icon-button" disabled={locked}
+              {!row.localId && row.amountMinor !== 0 && <ActionIcon variant="subtle" type="button" className="import-icon-button" disabled={locked}
                 aria-label={row.parts ? `Отменить разделение операции ${number}` : `Разделить операцию ${number}`}
                 title={row.parts ? 'Отменить разделение' : 'Разделить'} aria-pressed={!!row.parts}
                 onClick={() => row.parts ? updateRow(key, {parts: undefined}) : splitRow(row)}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 21v-7M12 14 5 7V3M12 14l7-7V3M2 6l3-3 3 3M16 6l3-3 3 3" /></svg>
-              </button>}
-              <button type="button" className="import-delete" disabled={locked} aria-label={`Удалить операцию ${number}`} title="Удалить из списка" onClick={() => removeRow(key)}>
+              </ActionIcon>}
+              <ActionIcon color="red" variant="light" type="button" className="import-delete" disabled={locked} aria-label={`Удалить операцию ${number}`} title="Удалить из списка" onClick={() => removeRow(key)}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" /></svg>
-              </button>
+              </ActionIcon>
             </div>
             {row.amountError && <p className="error-panel" role="alert" id={`amount-error-${key}`}>{row.amountError}</p>}
             <p className="import-description">{row.description}</p>{row.ruleName && <p className="muted">Правило: {row.ruleName}</p>}
@@ -174,7 +178,7 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
               <p>Сумма частей: {moneyInput(Math.abs(row.parts.reduce((sum,p) => sum+p.amountMinor,0)))} ₽ из {moneyInput(Math.abs(row.amountMinor))} ₽.</p>
               {row.parts.every(part => !part.amountError && !!part.amountText?.trim()) && splitInvalid(row) && <p className="error-panel" role="alert">Сумма частей должна совпадать с исходной.</p>}
               <div className="import-parts">{row.parts.map((part, index) => renderRow(part, `${number}.${index + 1}`))}</div>
-              <button type="button" className="import-icon-button import-add-part" aria-label={`Добавить часть операции ${number}`} title="Добавить часть" disabled={locked} onClick={() => updateRow(key, {parts: [...row.parts!, {...row, parts: undefined, localId: crypto.randomUUID(), amountText: '', amountError: 'Введите сумму.'}]})}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
+              <ActionIcon variant="subtle" type="button" className="import-icon-button import-add-part" aria-label={`Добавить часть операции ${number}`} title="Добавить часть" disabled={locked} onClick={() => updateRow(key, {parts: [...row.parts!, {...row, parts: undefined, localId: crypto.randomUUID(), amountText: '', amountError: 'Введите сумму.'}]})}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></ActionIcon>
             </div>}
             {!row.parts && <div className="import-row-fields">
               <div className="import-direction"><span>{direction}</span><ImportPicker label={`${direction} для операции ${number}`} value={selected} disabled={locked || !active || row.decision === 'skip' || !accountId}
@@ -187,42 +191,38 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
                   updateRow(key, { ruleName: undefined, categoryId: type === 'category' ? Number(id) : undefined, otherAccountId: type === 'account' ? Number(id) : undefined });
                 }} /></div>
               <TagInput label={`Теги операции ${number}`} value={row.tags} onChange={tags => updateRow(key, { tags })} disabled={locked || row.decision === 'skip'} />
-              <input className="import-comment" aria-label={`Комментарий операции ${number}`} maxLength={2000} value={row.comment} disabled={locked || row.decision === 'skip'} placeholder="Комментарий" onChange={e => updateRow(key, { comment: e.target.value })} />
+              <TextInput className="import-comment" aria-label={`Комментарий операции ${number}`} maxLength={2000} value={row.comment} disabled={locked || row.decision === 'skip'} placeholder="Комментарий" onChange={e => updateRow(key, { comment: e.target.value })} />
             </div>}
             {row.amountMinor === 0 && <p className="import-zero-note">Нулевая сумма — операция не будет сохранена.</p>}
             {!!matches.length && row.decision !== 'skip' && <div className="duplicate-note">{matches.map((match, i) => <p key={i}>{match.relatedRows ? `Похожие строки в этой выписке: ${match.relatedRows.map(ref => draft?.rows.find(candidate => rowKey(candidate) === rowKey(ref))).filter((candidate): candidate is Draft['rows'][number] => !!candidate).map(candidate => `№${candidate.statementNumber}`).join(', ')}. Оставьте нужные или подтвердите отдельные операции.` : <>{match.transactionId ? `Совпадение с ранее сохранённой операцией в истории, ID ${match.transactionId}. ` : ''}{match.reason}</>}</p>)}
-              <label className="duplicate-confirm"><input type="checkbox" checked={row.decision === 'keep'} disabled={locked || checking} onChange={e => updateRow(key, { decision: e.target.checked ? 'keep' : 'save' })} /><span>Сохранить как отдельную операцию</span></label>
+              <Checkbox className="duplicate-confirm" label="Сохранить как отдельную операцию" checked={row.decision === 'keep'} disabled={locked || checking} onChange={e => updateRow(key, { decision: e.target.checked ? 'keep' : 'save' })} />
             </div>}
-          </article>;
+          </Paper>;
   }
   return <>
-    <section className="overview-hero"><div><p className="eyebrow">От выписки — к учёту</p><h1>Загрузить выписку</h1><p className="intro-copy">Выберите счёт, распределите операции и сохраните результат.</p></div><span className="step-label">PDF → категории → история</span></section>
-    <ErrorNotice error={dataError} />{dataError && <button className="text-button" onClick={() => setRetry(v => v + 1)}>Загрузить справочники повторно</button>}
-    <div className="import-account-bar"><label className="field">Счёт выписки<select disabled={locked || !screen} value={accountId || ''} onChange={e => chooseAccount(Number(e.target.value))}><option value="">Выберите счёт</option>{screen?.accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label><button className="text-button" disabled={locked} onClick={() => setNewAccount(true)}>+ Создать счёт</button></div>
-    <div className={`upload-zone ${dragging && !locked ? 'is-dragging' : ''}`} aria-busy={loading}
-      onDragOver={e => { e.preventDefault(); setDragging(true); e.dataTransfer.dropEffect = locked ? 'none' : 'copy'; }}
-      onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }}
-      onDrop={e => { e.preventDefault(); setDragging(false); void upload(e.dataTransfer.files); }}>
-      <Icon name="card" color="#658c73" /><div className="upload-copy"><h2>{loading ? 'Читаем вашу выписку…' : 'Перетащите PDF сюда'}</h2><p>Один файл с текстовым слоем, до 20 МиБ</p></div>
-      <input className="hidden-input" ref={fileInput} type="file" accept=".pdf,application/pdf" aria-label="PDF-выписка" disabled={locked} onChange={e => { void upload(e.currentTarget.files); e.currentTarget.value = ''; }} />
-      <button className="primary-button" disabled={locked || !accountId} onClick={() => fileInput.current?.click()}>{loading ? 'Обработка…' : 'Выбрать PDF'}</button>
-    </div>
+    <section className="overview-hero"><div><p className="eyebrow">От выписки — к учёту</p><Title order={1}>Загрузить выписку</Title><p className="intro-copy">Выберите счёт, распределите операции и сохраните результат.</p></div><span className="step-label">PDF → категории → история</span></section>
+    <ErrorNotice error={dataError} />{dataError && <Button type="button" variant="subtle" className="text-button" onClick={() => setRetry(v => v + 1)}>Загрузить справочники повторно</Button>}
+    <div className="import-account-bar"><Choice label="Счёт выписки" className="field" disabled={locked || !screen} value={accountId || ''} onChange={e => chooseAccount(Number(e.target.value))}><option value="">Выберите счёт</option>{screen?.accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</Choice><Button type="button" variant="subtle" className="text-button" disabled={locked} onClick={() => setNewAccount(true)}>+ Создать счёт</Button></div>
+    <Dropzone openRef={openFile} onDrop={files => void upload(files)} disabled={locked || !accountId} activateOnClick={false} aria-busy={loading} inputProps={{'aria-label': 'PDF-выписка', accept: '.pdf,application/pdf'}}>
+      <Group justify="space-between" wrap="wrap"><Icon name="card"/><div className="upload-copy"><Title order={2}>{loading ? 'Читаем вашу выписку…' : 'Перетащите PDF сюда'}</Title><p>Один файл с текстовым слоем, до 20 МиБ</p></div>
+      <Button type="button" disabled={locked || !accountId} onClick={() => openFile.current?.()}>{loading ? 'Обработка…' : 'Выбрать PDF'}</Button></Group>
+    </Dropzone>
     <p className="privacy-note">Файл обрабатывается на этом компьютере. До сохранения разметка живёт только в этой вкладке.</p>
     <ErrorNotice error={error} />
     {draft && <section className="results" aria-labelledby="import-title">
-      <div className="section-heading"><div><h2 id="import-title">Распознанные операции <span className="count">{draft.rows.length}</span></h2><p className="file-name">{draft.fileName}</p></div><button className="text-button" disabled={locked} onClick={clearDraft}>Очистить</button></div>
+      <div className="section-heading"><div><Title order={2} id="import-title">Распознанные операции <span className="count">{draft.rows.length}</span></Title><p className="file-name">{draft.fileName}</p></div><Button type="button" variant="subtle" className="text-button" disabled={locked} onClick={clearDraft}>Очистить</Button></div>
       {draft.warnings.length > 0 && <details className="warnings"><summary>Есть строки, которые требуют проверки ({draft.warnings.length})</summary><ul>{draft.warnings.map((w, i) => <li key={i}>Страница {w.sourcePage}. {w.message}</li>)}</ul></details>}
       {currentCheck?.alreadyImported && <div className="warnings" role="alert">Эта выписка уже сохранена для выбранного счёта. Исправить операции можно в истории на экране «Обзор».</div>}
       <ErrorNotice error={checkError} />
-      {checkError && <button className="text-button" disabled={locked} onClick={() => setCheckRetry(v => v + 1)}>Проверить совпадения ещё раз</button>}
+      {checkError && <Button type="button" variant="subtle" className="text-button" disabled={locked} onClick={() => setCheckRetry(v => v + 1)}>Проверить совпадения ещё раз</Button>}
       {!!draft.rows.length && <>
         <p className="table-note">{checking ? 'Проверяем совпадения…' : !accountId ? 'Выберите счёт выписки, чтобы проверить совпадения.' : 'Сверьте операции с PDF. Перевод между своими счетами учитывается один раз.'}</p>
         <div className="import-list">{draft.rows.map(row => renderRow(row, row.statementNumber))}</div>
         <div className="import-save-bar"><div><strong>{pendingSubmission ? 'Подтвердите результат сохранения' : `Разобрано ${readyCount} из ${draft.rows.length}`}</strong><p>{pendingSubmission ? 'Повтор отправит тот же запрос и не создаст операции дважды.' : `Будет сохранено: ${kept}. Пропущено: ${draft.rows.length - kept}.`}</p></div>
-          {(ready || pendingSubmission) ? <button className="primary-button" disabled={saving} onClick={() => void save()}>{saving ? 'Сохраняем…' : pendingSubmission ? 'Повторить сохранение' : 'Сохранить операции'}</button> : <span className="muted">{currentCheck?.alreadyImported ? 'Выписка уже сохранена' : kept === 0 ? 'Все строки пропущены' : 'Распределите операции и проверьте совпадения'}</span>}
+          {(ready || pendingSubmission) ? <Button type="button" className="primary-button" disabled={saving} onClick={() => void save()}>{saving ? 'Сохраняем…' : pendingSubmission ? 'Повторить сохранение' : 'Сохранить операции'}</Button> : <span className="muted">{currentCheck?.alreadyImported ? 'Выписка уже сохранена' : kept === 0 ? 'Все строки пропущены' : 'Распределите операции и проверьте совпадения'}</span>}
         </div>
       </>}
-      {!draft.rows.length && <div className="empty-result"><h3>Нет операций для сохранения</h3><p>Все строки удалены или в выписке не найдены операции. Можно загрузить другую выписку.</p></div>}
+      {!draft.rows.length && <div className="empty-result"><Title order={3}>Нет операций для сохранения</Title><p>Все строки удалены или в выписке не найдены операции. Можно загрузить другую выписку.</p></div>}
     </section>}
     {newAccount && <AccountForm onClose={() => setNewAccount(false)} onSaved={onChanged} />}
   </>;

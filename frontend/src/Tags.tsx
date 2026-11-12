@@ -1,3 +1,4 @@
+import { Badge, Combobox, PillsInput, Pill, useCombobox } from '@mantine/core';
 import { createContext, useContext, useEffect, useId, useState, type ReactNode } from 'react';
 import { api } from './api';
 
@@ -15,7 +16,7 @@ export function TagProvider({ children, revision }: { children: ReactNode; revis
 }
 
 export function TagLabels({ tags = [] }: { tags?: string[] }) {
-  return <span className="tag-labels">{tags.map(tag => <span className="tag" key={tagKey(tag)}>{tag}</span>)}</span>;
+  return <span className="tag-labels">{tags.map(tag => <Badge variant="light" className="tag" key={tagKey(tag)}>{tag}</Badge>)}</span>;
 }
 
 type Props = {
@@ -37,25 +38,27 @@ export function TagInput({ value = [], onChange, disabled = false, label = 'Те
     return () => controller.abort();
   }, [catalog]);
 
-  function add() {
-    const name = text.trim().replace(/\s+/g, ' ');
+  const combobox = useCombobox();
+  function add(raw = text) {
+    const name = raw.trim().replace(/\s+/g, ' ');
     if (name && !value.some(tag => tagKey(tag) === tagKey(name))) {
       onChange([...value, options.find(tag => tagKey(tag) === tagKey(name)) || name]);
     }
     setText('');
   }
 
-  return <div className="field">
-    <label htmlFor={id}>{label}</label>
-    <div className="tag-labels">{value.map(tag => <span className="tag" key={tagKey(tag)}>
-      {tag}<button type="button" disabled={disabled} aria-label={`Убрать тег ${tag}`} onClick={() => onChange(value.filter(t => t !== tag))}>×</button>
-    </span>)}</div>
-    <input id={id} disabled={disabled} maxLength={80} value={text} list={`${id}-tags`} placeholder="Введите тег"
-      onChange={event => setText(event.target.value)} onBlur={add}
-      onKeyDown={event => {
-        if (event.key === 'Enter') { event.preventDefault(); add(); }
-        if (event.key === 'Escape') { event.preventDefault(); setText(''); }
-      }} />
-    <datalist id={`${id}-tags`}>{options.filter(tag => !value.some(v => tagKey(tag) === tagKey(v))).map(tag => <option key={tag} value={tag} />)}</datalist>
-  </div>;
+  return <Combobox store={combobox} withinPortal={false} onOptionSubmit={tag => { add(tag); combobox.closeDropdown(); }}>
+    <Combobox.DropdownTarget><PillsInput label={label} className="field" disabled={disabled} onClick={() => { if (!disabled) combobox.openDropdown(); }}>
+      <Pill.Group>{value.map(tag => <Pill key={tagKey(tag)} withRemoveButton disabled={disabled} removeButtonProps={{disabled, tabIndex: 0, 'aria-hidden': false, 'aria-label': `Убрать тег ${tag}`}} onRemove={() => { if (!disabled) onChange(value.filter(t => t !== tag)); }}>{tag}</Pill>)}
+        <Combobox.EventsTarget><PillsInput.Field id={id} aria-label={label} disabled={disabled} maxLength={80} value={text} placeholder="Введите тег"
+          onChange={e => { setText(e.target.value); combobox.openDropdown(); combobox.resetSelectedOption(); }}
+          onBlur={() => { add(); combobox.closeDropdown(); }}
+          onKeyDown={e => {
+            if(e.key === 'Enter' && combobox.selectedOptionIndex === -1) {e.preventDefault();add();combobox.closeDropdown();}
+            if(e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setText(''); combobox.closeDropdown(); }
+          }}/></Combobox.EventsTarget>
+      </Pill.Group>
+    </PillsInput></Combobox.DropdownTarget>
+    <Combobox.Dropdown hidden={disabled}><Combobox.Options>{options.filter(tag => !value.some(v => tagKey(v) === tagKey(tag)) && tagKey(tag).includes(tagKey(text))).map(tag => <Combobox.Option key={tag} value={tag}>{tag}</Combobox.Option>)}</Combobox.Options></Combobox.Dropdown>
+  </Combobox>;
 }
