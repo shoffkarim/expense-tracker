@@ -257,29 +257,7 @@ func (s *Store) history(ctx context.Context, f HistoryFilter) (History, error) {
 	if f.Page < 1 || f.Page > 1000000 || f.AccountID < 0 || f.CategoryID < 0 || (f.From != "" && !validDate(f.From)) || (f.To != "" && !validDate(f.To)) || (f.From != "" && f.To != "" && f.From > f.To) {
 		return out, invalid("Некорректные параметры истории.")
 	}
-	where := []string{"deleted=0"}
-	args := []any{}
-	if f.AccountID != 0 {
-		where = append(where, "(source_account_id=? OR destination_account_id=?)")
-		args = append(args, f.AccountID, f.AccountID)
-	}
-	if f.CategoryID != 0 {
-		where = append(where, "category_id=?")
-		args = append(args, f.CategoryID)
-	}
-	if f.Tag != "" {
-		where = append(where, "EXISTS (SELECT 1 FROM transaction_tags tt JOIN tags tg ON tg.id=tt.tag_id WHERE tt.transaction_id=transactions.id AND tg.key=?)")
-		args = append(args, descriptionKey(f.Tag))
-	}
-	if f.From != "" {
-		where = append(where, "date>=?")
-		args = append(args, f.From)
-	}
-	if f.To != "" {
-		where = append(where, "date<=?")
-		args = append(args, f.To)
-	}
-	clause := strings.Join(where, " AND ")
+	clause, args := transactionConditions(f)
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM transactions WHERE "+clause, args...).Scan(&out.Total); err != nil {
 			return err
@@ -310,4 +288,31 @@ func (s *Store) history(ctx context.Context, f HistoryFilter) (History, error) {
 		return nil
 	})
 	return out, err
+}
+
+func transactionConditions(f HistoryFilter) (string, []any) {
+	where := []string{"deleted=0"}
+	args := []any{}
+	if f.AccountID != 0 {
+		where = append(where, "(source_account_id=? OR destination_account_id=?)")
+		args = append(args, f.AccountID, f.AccountID)
+	}
+	if f.CategoryID != 0 {
+		where = append(where, "category_id=?")
+		args = append(args, f.CategoryID)
+	}
+	if f.Tag != "" {
+		where = append(where, "EXISTS (SELECT 1 FROM transaction_tags tt JOIN tags tg ON tg.id=tt.tag_id WHERE tt.transaction_id=transactions.id AND tg.key=?)")
+		args = append(args, descriptionKey(f.Tag))
+	}
+	if f.From != "" {
+		where = append(where, "date>=?")
+		args = append(args, f.From)
+	}
+	if f.To != "" {
+		where = append(where, "date<=?")
+		args = append(args, f.To)
+	}
+	clause := strings.Join(where, " AND ")
+	return clause, args
 }

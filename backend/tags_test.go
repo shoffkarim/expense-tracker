@@ -82,7 +82,7 @@ func TestTagsMigration(t *testing.T) {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			s := testStore(t)
 			a := account(t, s, "synthetic", 100)
-			_, err := s.db.Exec("DROP TRIGGER accounts_position; DROP TRIGGER categories_position; ALTER TABLE accounts DROP COLUMN dashboard_position; ALTER TABLE categories DROP COLUMN dashboard_position; DROP TABLE transaction_tags; DROP TABLE tags")
+			_, err := s.db.Exec("ALTER TABLE accounts DROP COLUMN monthly_limit_minor; ALTER TABLE categories DROP COLUMN monthly_limit_minor; DROP TABLE settings; DROP TRIGGER accounts_position; DROP TRIGGER categories_position; ALTER TABLE accounts DROP COLUMN dashboard_position; ALTER TABLE categories DROP COLUMN dashboard_position; DROP TABLE transaction_tags; DROP TABLE tags")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -95,7 +95,7 @@ func TestTagsMigration(t *testing.T) {
 			}
 			var got int
 			s.db.QueryRow("PRAGMA user_version").Scan(&got)
-			if got != 5 {
+			if got != 6 {
 				t.Fatal(got)
 			}
 			var balance int64

@@ -5,10 +5,11 @@ import { SortableGroup, SortableCard } from './Sortable';
 import { TagInput, TagLabels } from './Tags';
 import { useEffect, useState } from 'react';
 import { api, type Screen } from './api';
-import { ErrorNotice, Modal, message, money, moneyInput, cleanMoneyInput, parseMoneyInput } from './ui';
+import { ErrorNotice, Modal, message, useMoney, moneyInput, cleanMoneyInput, parseMoneyInput } from './ui';
 type Rule = { tags?: string[]; id: number; name: string; accountId: number; direction: string; condition: string; text: string; texts?: string[]; day: number; amountMinor: number; categoryId: number; otherAccountId: number; available: boolean };
 const empty: Rule = { id: 0, name: '', accountId: 0, direction: 'expense', condition: 'text', text: '', texts: [''], day: 1, amountMinor: 0, categoryId: 0, otherAccountId: 0, available: true };
 export function Rules({ screen, onChanged }: { screen: Screen; onChanged?: (notice: string) => void }) {
+  const money = useMoney();
  const { confirm, confirming } = useConfirm();
  const [rules,setRules]=useState<Rule[]>([]),[edit,setEdit]=useState<Rule|null>(null),[amount,setAmount]=useState(''),[error,setError]=useState(''),[formError,setFormError]=useState(''),[busy,setBusy]=useState(false);
  async function load(){try{setRules(await api<Rule[]>('/rules'));setError('')}catch(e){setError(message(e))}}

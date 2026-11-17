@@ -73,11 +73,15 @@ func (s *Store) migrate() error {
 		if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 			return err
 		}
-		if version > 5 {
+		if version > 6 {
 			return errors.New("база создана более новой версией приложения")
 		}
-		if version == 5 {
+		if version == 6 {
 			return nil
+		}
+		if version == 5 {
+			_, err := tx.Exec("ALTER TABLE accounts ADD COLUMN monthly_limit_minor INTEGER; ALTER TABLE categories ADD COLUMN monthly_limit_minor INTEGER; CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK(id=1), monthly_limit_minor INTEGER); INSERT INTO settings(id) VALUES(1); PRAGMA user_version=6;")
+			return err
 		}
 		if version == 4 {
 			_, err := tx.Exec(`ALTER TABLE accounts ADD COLUMN dashboard_position INTEGER NOT NULL DEFAULT 0; ALTER TABLE categories ADD COLUMN dashboard_position INTEGER NOT NULL DEFAULT 0; UPDATE accounts SET dashboard_position=id; UPDATE categories SET dashboard_position=id; CREATE TRIGGER accounts_position AFTER INSERT ON accounts BEGIN UPDATE accounts SET dashboard_position=(SELECT COALESCE(MAX(dashboard_position),0)+1 FROM accounts) WHERE id=NEW.id; END; CREATE TRIGGER categories_position AFTER INSERT ON categories BEGIN UPDATE categories SET dashboard_position=(SELECT COALESCE(MAX(dashboard_position),0)+1 FROM categories WHERE kind=NEW.kind) WHERE id=NEW.id; END; PRAGMA user_version=5;`)
@@ -133,7 +137,7 @@ func (s *Store) migrate() error {
 	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version < 5 {
+	if version < 6 {
 		return s.migrate()
 	}
 	return nil
@@ -152,6 +156,8 @@ func (s *Store) write(ctx context.Context, fn func(*sql.Tx) error) error {
 }
 
 type Account struct {
+	MonthlyExpenseMinor int64  `json:"monthlyExpenseMinor"`
+	MonthlyLimitMinor   *int64 `json:"monthlyLimitMinor"`
 	DashboardPosition   int64  `json:"dashboardPosition"`
 	ID                  int64  `json:"id"`
 	Name                string `json:"name"`
@@ -162,12 +168,14 @@ type Account struct {
 	Archived            bool   `json:"archived"`
 }
 type AccountInput struct {
-	Name         string `json:"name"`
-	Color        string `json:"color"`
-	Icon         string `json:"icon"`
-	BalanceMinor int64  `json:"balanceMinor"`
+	MonthlyLimitMinor OptionalLimit `json:"monthlyLimitMinor"`
+	Name              string        `json:"name"`
+	Color             string        `json:"color"`
+	Icon              string        `json:"icon"`
+	BalanceMinor      int64         `json:"balanceMinor"`
 }
 type Category struct {
+	MonthlyLimitMinor *int64 `json:"monthlyLimitMinor"`
 	DashboardPosition int64  `json:"dashboardPosition"`
 	ID                int64  `json:"id"`
 	Kind              string `json:"kind"`
@@ -178,12 +186,14 @@ type Category struct {
 	AmountMinor       int64  `json:"amountMinor"`
 }
 type CategoryInput struct {
-	Kind  string `json:"kind"`
-	Name  string `json:"name"`
-	Color string `json:"color"`
-	Icon  string `json:"icon"`
+	MonthlyLimitMinor OptionalLimit `json:"monthlyLimitMinor"`
+	Kind              string        `json:"kind"`
+	Name              string        `json:"name"`
+	Color             string        `json:"color"`
+	Icon              string        `json:"icon"`
 }
 type Screen struct {
+	MonthlyLimitMinor *int64     `json:"monthlyLimitMinor"`
 	Month             string     `json:"month"`
 	TotalBalanceMinor int64      `json:"totalBalanceMinor"`
 	Accounts          []Account  `json:"accounts"`
@@ -206,13 +216,13 @@ func validAppearance(name, color, icon string) error {
 func (s *Store) screen(ctx context.Context, activeOnly bool) (Screen, error) {
 	out := Screen{Month: s.now().Format("2006-01"), Accounts: []Account{}, Categories: []Category{}}
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, "SELECT id,name,color,icon,initial_balance_minor,balance_minor,archived,dashboard_position FROM accounts ORDER BY archived,id")
+		rows, err := tx.QueryContext(ctx, "SELECT id,name,color,icon,initial_balance_minor,balance_minor,archived,dashboard_position,monthly_limit_minor FROM accounts ORDER BY archived,id")
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
 			var a Account
-			if err = rows.Scan(&a.ID, &a.Name, &a.Color, &a.Icon, &a.InitialBalanceMinor, &a.BalanceMinor, &a.Archived, &a.DashboardPosition); err != nil {
+			if err = rows.Scan(&a.ID, &a.Name, &a.Color, &a.Icon, &a.InitialBalanceMinor, &a.BalanceMinor, &a.Archived, &a.DashboardPosition, &a.MonthlyLimitMinor); err != nil {
 				rows.Close()
 				return err
 			}
@@ -232,7 +242,7 @@ func (s *Store) screen(ctx context.Context, activeOnly bool) (Screen, error) {
 		if err != nil {
 			return err
 		}
-		rows, err = tx.QueryContext(ctx, `SELECT c.id,c.kind,c.name,c.color,c.icon,c.archived,COALESCE(m.amount_minor,0),c.dashboard_position
+		rows, err = tx.QueryContext(ctx, `SELECT c.id,c.kind,c.name,c.color,c.icon,c.archived,COALESCE(m.amount_minor,0),c.dashboard_position,c.monthly_limit_minor
 			FROM categories c LEFT JOIN category_months m ON m.category_id=c.id AND m.month=? ORDER BY c.archived,c.id`, out.Month)
 		if err != nil {
 			return err
@@ -240,14 +250,44 @@ func (s *Store) screen(ctx context.Context, activeOnly bool) (Screen, error) {
 		defer rows.Close()
 		for rows.Next() {
 			var c Category
-			if err = rows.Scan(&c.ID, &c.Kind, &c.Name, &c.Color, &c.Icon, &c.Archived, &c.AmountMinor, &c.DashboardPosition); err != nil {
+			if err = rows.Scan(&c.ID, &c.Kind, &c.Name, &c.Color, &c.Icon, &c.Archived, &c.AmountMinor, &c.DashboardPosition, &c.MonthlyLimitMinor); err != nil {
 				return err
 			}
 			if !activeOnly || !c.Archived {
 				out.Categories = append(out.Categories, c)
 			}
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+		if err := tx.QueryRowContext(ctx, "SELECT monthly_limit_minor FROM settings WHERE id=1").Scan(&out.MonthlyLimitMinor); err != nil {
+			return err
+		}
+		for i := range out.Accounts {
+			r, err := tx.QueryContext(ctx, "SELECT amount_minor FROM transactions WHERE deleted=0 AND kind='expense' AND source_account_id=? AND substr(date,1,7)=?", out.Accounts[i].ID, out.Month)
+			if err != nil {
+				return err
+			}
+			for r.Next() {
+				var amount int64
+				if err = r.Scan(&amount); err != nil {
+					r.Close()
+					return err
+				}
+				out.Accounts[i].MonthlyExpenseMinor, err = checkedAdd(out.Accounts[i].MonthlyExpenseMinor, amount)
+				if err != nil {
+					r.Close()
+					return err
+				}
+			}
+			err = r.Err()
+			r.Close()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	return out, err
 }
@@ -260,6 +300,9 @@ func checkedAdd(a, b int64) (int64, error) {
 }
 
 func (s *Store) saveAccount(ctx context.Context, id int64, in AccountInput) (int64, error) {
+	if err := in.MonthlyLimitMinor.validate(); err != nil {
+		return 0, err
+	}
 	if err := validAppearance(in.Name, in.Color, in.Icon); err != nil {
 		return 0, err
 	}
@@ -273,7 +316,10 @@ func (s *Store) saveAccount(ctx context.Context, id int64, in AccountInput) (int
 				return err
 			}
 			id, err = result.LastInsertId()
-			return err
+			if err != nil {
+				return err
+			}
+			return saveLimit(ctx, tx, "accounts", id, in.MonthlyLimitMinor)
 		}
 		var before int64
 		var archived bool
@@ -289,12 +335,21 @@ func (s *Store) saveAccount(ctx context.Context, id int64, in AccountInput) (int
 			}
 		}
 		_, err := tx.ExecContext(ctx, "UPDATE accounts SET name=?,color=?,icon=?,balance_minor=? WHERE id=?", strings.TrimSpace(in.Name), in.Color, in.Icon, in.BalanceMinor, id)
-		return err
+		if err != nil {
+			return err
+		}
+		return saveLimit(ctx, tx, "accounts", id, in.MonthlyLimitMinor)
 	})
 	return id, err
 }
 
 func (s *Store) saveCategory(ctx context.Context, id int64, in CategoryInput) (int64, error) {
+	if err := in.MonthlyLimitMinor.validate(); err != nil {
+		return 0, err
+	}
+	if in.Kind == "income" && in.MonthlyLimitMinor.Value != nil {
+		return 0, invalid("Лимит доступен только для расходов.")
+	}
 	if err := validAppearance(in.Name, in.Color, in.Icon); err != nil {
 		return 0, err
 	}
@@ -308,7 +363,10 @@ func (s *Store) saveCategory(ctx context.Context, id int64, in CategoryInput) (i
 				return err
 			}
 			id, err = result.LastInsertId()
-			return err
+			if err != nil {
+				return err
+			}
+			return saveLimit(ctx, tx, "categories", id, in.MonthlyLimitMinor)
 		}
 		var kind string
 		var archived bool
@@ -322,7 +380,10 @@ func (s *Store) saveCategory(ctx context.Context, id int64, in CategoryInput) (i
 			return invalid("Тип существующей категории менять нельзя.")
 		}
 		_, err := tx.ExecContext(ctx, "UPDATE categories SET name=?,color=?,icon=? WHERE id=?", strings.TrimSpace(in.Name), in.Color, in.Icon, id)
-		return err
+		if err != nil {
+			return err
+		}
+		return saveLimit(ctx, tx, "categories", id, in.MonthlyLimitMinor)
 	})
 	return id, err
 }

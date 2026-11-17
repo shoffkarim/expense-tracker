@@ -2,7 +2,7 @@ import { test, beforeEach, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost:8080/#/dashboard' });
-for (const key of ['window', 'document', 'Element', 'Node', 'Document', 'MutationObserver', 'AbortController', 'AbortSignal', 'getComputedStyle', 'HTMLElement', 'ShadowRoot', 'SVGElement', 'HTMLInputElement', 'HTMLSelectElement', 'HTMLDialogElement', 'Event', 'MouseEvent', 'DOMException', 'FormData', 'File']) globalThis[key] = dom.window[key];
+for (const key of ['window', 'document', 'Element', 'Node', 'Document', 'MutationObserver', 'AbortController', 'AbortSignal', 'getComputedStyle', 'HTMLElement', 'HTMLSlotElement', 'ShadowRoot', 'SVGElement', 'HTMLInputElement', 'HTMLSelectElement', 'HTMLDialogElement', 'Event', 'MouseEvent', 'DOMException', 'FormData', 'File']) globalThis[key] = dom.window[key];
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator });
 HTMLElement.prototype.scrollIntoView = () => {};
 globalThis.requestAnimationFrame = callback => setTimeout(callback, 0);
@@ -611,7 +611,7 @@ test('dashboard positions affect cards but preserve account choices', async () =
     ? ok({...base, accounts: base.accounts.map((a,i)=>({...a,dashboardPosition:1-i}))})
     : ok({transactions:[],total:0,page:1,pageSize:20});
   await render(h(App));
-  assert.deepEqual([...document.querySelectorAll('.account-grid .card-name')].map(el=>el.textContent), ['Наличные','Карта']);
+  assert.deepEqual([...document.querySelectorAll('.tile-slide .account-card .card-name')].map(el=>el.textContent), ['Наличные','Карта']);
   await click(button('+ Добавить операцию'));
   await click(field('Откуда'));
   const choices = [...document.querySelectorAll('[role=option]')].map(el=>el.textContent);
@@ -679,4 +679,100 @@ test('Mantine choices retain required validation and date input sends ISO withou
   assert.equal(field('Дата').checkValidity(),true);
   await submit();
   assert.equal(requests.find(r=>r.url==='/api/transactions'&&r.method==='POST').body.date,'2026-11-08');
+});
+
+test('analytics month navigation, filters, all time and reset', async () => {
+ const { AnalyticsScreen } = await import('../src/AnalyticsScreen.tsx');
+ respond = async url => ok({totalMinor:100,categories:[{categoryId:1,name:'Еда',color:'#c87946',amountMinor:100}]});
+ await render(h(AnalyticsScreen,{screen:base,revision:0}));
+ const latest=()=>new URL(requests.filter(r=>r.url.startsWith('/api/analytics?')).at(-1).url,'http://localhost').searchParams;
+ const initial=latest().get('from');
+ await click(document.querySelector('[aria-label="Предыдущий месяц"]'));
+ assert.notEqual(latest().get('from'),initial);
+ await change(document.querySelector('input[name]') || document.querySelector('.history-filters input[type=hidden]'),'1');
+ assert.equal(document.querySelector('[aria-label="Предыдущий месяц"]'),null);
+ await click(button('За все время'));
+ assert.equal(latest().get('from'),'');
+ assert.equal(latest().get('accountId'),'1');
+ assert.equal(document.querySelector('[aria-label="Следующий месяц"]'),null);
+ await click(button('По месяцам'));
+ assert.equal(latest().get('accountId'),'1');
+ assert.notEqual(latest().get('from'),initial);
+ assert.notEqual(latest().get('from'),'');
+ assert.ok(document.querySelector('[aria-label="Следующий месяц"]'));
+ assert.ok(button('За все время'));
+ await click(button('За все время'));
+ assert.ok(button('По месяцам'));
+ await click(button('Сбросить фильтры'));
+ assert.equal(latest().get('from'),initial);
+ assert.ok(document.querySelector('[aria-label="Следующий месяц"]'));
+});
+
+test('donut retains zero categories and legend activates only positive sectors', async () => {
+ const { CategoryDonut, categoryColors } = await import('../src/CategoryDonut.tsx');
+ const categories=Array.from({length:30},(_,i)=>({...base.categories[0],id:i+1,name:'Категория '+i,color:i%2?'#C87946':'#c87946',archived:i===1}));
+ const colors=categoryColors(categories);
+ assert.equal(new Set(colors.values()).size,30);
+ assert.deepEqual(categoryColors([...categories].reverse()),colors);
+ await render(h(CategoryDonut,{categories,data:{totalMinor:100,categories:[{categoryId:1,amountMinor:100}]}}));
+ assert.equal(document.querySelectorAll('.analytics-chart li').length,30);
+ assert.equal(document.querySelectorAll('.donut-sector').length,1);
+ const rows=document.querySelectorAll('.analytics-chart li');
+ assert.match(rows[1].textContent,/архив/);
+ assert.match(rows[1].textContent,/0%/);
+ await act(async()=>rows[0].dispatchEvent(new MouseEvent('mouseover',{bubbles:true})));
+ assert.ok(document.querySelector('.donut-sector.active'));
+ assert.ok(document.querySelector('[role=tooltip]'));
+ await act(async()=>rows[1].dispatchEvent(new MouseEvent('mouseover',{bubbles:true})));
+ assert.equal(document.querySelector('.donut-sector.active'),null);
+ await render(h(CategoryDonut,{categories,data:{totalMinor:0,categories:[]}}));
+ assert.equal(document.querySelectorAll('.analytics-chart li').length,30);
+ assert.equal(document.querySelectorAll('.donut-sector').length,0);
+});
+
+
+test('dashboard paginates accounts and categories and shows monthly totals', async () => {
+  const accounts = Array.from({length:11},(_,i)=>({...base.accounts[0],id:i+1,name:`Счёт ${i}`}));
+  const categories = Array.from({length:33},(_,i)=>({...base.categories[0],id:i+1,name:`Расход ${i}`,amountMinor:100,archived:i===32}));
+  categories.push({...base.categories[1],id:34,amountMinor:2500});
+  respond = async url => url === '/api/dashboard' || url === '/api/import-screen' ? ok({...base,accounts,categories}) : ok([]);
+  await render(h(App));
+  const carousels = document.querySelectorAll('.tile-carousel');
+  assert.equal(carousels.length,3);
+  assert.deepEqual([...carousels[0].querySelectorAll('.tile-slide')].map(s=>s.children.length),[10,1]);
+  assert.deepEqual([...carousels[1].querySelectorAll('.tile-slide')].map(s=>s.children.length),[32,1]);
+  const banner=document.querySelector('.balance-month');
+  assert.ok(banner.textContent.includes(money(3300)));
+  assert.ok(banner.textContent.includes(money(2500)));
+});
+
+test('monthly limits distinguish unset, equality and exceeded amounts', async () => {
+  const { LimitAmount } = await import('../src/Limits.tsx');
+  await render(h(LimitAmount, { amount: 100, limit: 100 }));
+  assert.match(document.getElementById('root').textContent, /\//);
+  assert.equal(document.querySelector('#root span').style.color, '');
+  await render(h(LimitAmount, { amount: 101, limit: 100 }));
+  assert.ok(document.querySelector('#root span').style.color);
+  await render(h(LimitAmount, { amount: 101, limit: null }));
+  assert.doesNotMatch(document.getElementById('root').textContent, /\//);
+  assert.equal(document.querySelector('#root span').style.color, '');
+});
+
+test('hidden kopecks round display without changing input precision', () => {
+  assert.equal(money(149, false), '1 ₽');
+  assert.equal(money(150, false), '2 ₽');
+  assert.equal(money(-150, false), '−2 ₽');
+  assert.equal(money(-1, false), '0 ₽');
+  assert.equal(money(Number.MAX_SAFE_INTEGER, false), '90 071 992 547 410 ₽');
+  assert.equal(moneyInput(150), '1.50');
+});
+
+test('precision preference updates limit display without changing exceeded state', async () => {
+  const { MoneyPrecision } = await import('../src/ui.tsx');
+  const { LimitAmount } = await import('../src/Limits.tsx');
+  await render(h(MoneyPrecision.Provider, {value:false}, h(LimitAmount,{amount:101,limit:100})));
+  assert.doesNotMatch(document.getElementById('root').textContent, /,/);
+  assert.ok(document.querySelector('#root span').style.color);
+  await render(h(MoneyPrecision.Provider, {value:true}, h(LimitAmount,{amount:101,limit:100})));
+  assert.match(document.getElementById('root').textContent, /1,01/);
 });

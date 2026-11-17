@@ -1,17 +1,27 @@
 import { iconCatalog } from './icons';
 import { IconPicker } from './IconPicker';
-import { type ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 import { Alert, Modal as MantineModal, ColorSwatch, ThemeIcon } from '@mantine/core';
 
-export const palette = ['#c87946', '#658c73', '#627eaa', '#b66a7e', '#8c7aa9', '#b69a48', '#528e91', '#626866'];
+export const palette = ['#c87946', '#658c73', '#627eaa', '#b66a7e', '#8c7aa9', '#b69a48', '#528e91', '#626866', '#e03131', '#9c36b5', '#6741d9', '#364fc7', '#1971c2', '#0c8599', '#099268', '#2f9e44', '#66a80f', '#e67700', '#d9480f', '#a61e4d', '#5f3dc4', '#087f5b', '#862e9c', '#495057'];
 export function Icon({ name, color, size = 40 }: { name: string; color?: string; size?: number }) {
   const Glyph = (iconCatalog.find(item => item.id === name) || iconCatalog.find(item => item.id === 'other')!).component;
   return <ThemeIcon className="tile-icon" variant="light" color={color} size={size}><Glyph strokeWidth={1.6} aria-hidden="true" /></ThemeIcon>;
 }
 const rubles = new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 2 });
-export function money(minor: number) {
+export const MoneyPrecision = createContext(true);
+export function useMoney() {
+  const showKopecks = useContext(MoneyPrecision);
+  return (minor: number) => money(minor, showKopecks);
+}
+const wholeRubles = new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 });
+export function money(minor: number, showKopecks = true) {
   const value = BigInt(minor);
   const absolute = value < 0n ? -value : value;
+  if (!showKopecks) {
+    const rounded = (absolute + 50n) / 100n;
+    return `${value < 0n && rounded !== 0n ? '−' : ''}${wholeRubles.format(rounded)}`;
+  }
   const formatted = rubles.formatToParts(absolute / 100n)
     .map(part => part.type === 'fraction' ? String(absolute % 100n).padStart(2, '0') : part.value).join('');
   return `${value < 0n ? '−' : ''}${formatted}`;

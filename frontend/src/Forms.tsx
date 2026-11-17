@@ -1,14 +1,17 @@
+import { LimitField, limitValue } from './Limits';
 import { useConfirm } from './Confirm';
 import { TextInput, Button, Textarea } from '@mantine/core';
 import { Choice, CalendarInput } from './Controls';
 import { TagInput } from './Tags';
 import { useState, type FormEvent } from 'react';
 import { api, type Account, type Category, type Kind, type Operation, type OperationInput, type Screen } from './api';
-import { Appearance, ErrorNotice, Modal, message, money, moneyInput, cleanMoneyInput, parseMoneyInput, today } from './ui';
+import { Appearance, ErrorNotice, Modal, message, useMoney, moneyInput, cleanMoneyInput, parseMoneyInput, today } from './ui';
 
 type FormProps = { onClose: () => void; onSaved: (notice: string) => void };
 export function AccountForm({ account, onClose, onSaved }: FormProps & { account?: Account }) {
+  const money = useMoney();
  const { confirm, confirming } = useConfirm();
+  const [limit,setLimit]=useState(account?.monthlyLimitMinor == null ? '' : moneyInput(account.monthlyLimitMinor));
   const [name, setName] = useState(account?.name || '');
   const [color, setColor] = useState(account?.color || '#658c73');
   const [icon, setIcon] = useState(account?.icon || 'wallet');
@@ -18,7 +21,7 @@ export function AccountForm({ account, onClose, onSaved }: FormProps & { account
   async function save(event: FormEvent) {
     event.preventDefault(); if (busy || confirming) return; setError(''); setBusy(true);
     try {
-      await api(`/accounts${account ? `/${account.id}` : ''}`, account ? 'PATCH' : 'POST', { name, color, icon, balanceMinor: parseMoneyInput(balance, true) });
+      await api(`/accounts${account ? `/${account.id}` : ''}`, account ? 'PATCH' : 'POST', { monthlyLimitMinor:limitValue(limit), name, color, icon, balanceMinor: parseMoneyInput(balance, true) });
       onSaved(account ? 'Счёт обновлён.' : 'Счёт создан.'); onClose();
     } catch (e) { setError(message(e)); } finally { setBusy(false); }
   }
@@ -32,6 +35,7 @@ export function AccountForm({ account, onClose, onSaved }: FormProps & { account
       <TextInput label="Название" className="field" autoFocus data-autofocus required maxLength={80} value={name} onChange={e => setName(e.target.value)} placeholder="Например, основная карта" disabled={busy || confirming} />
       <TextInput label={account ? 'Текущий баланс, ₽' : 'Начальный баланс, ₽'} className="field" required inputMode="decimal" value={balance} onChange={e => setBalance(cleanMoneyInput(e.target, true))} disabled={busy || confirming} />
       <p className="field-note">{account ? 'Изменение остатка не учитывается в доходах и расходах.' : 'Каждая сохранённая операция изменит этот остаток, независимо от её даты.'}</p>
+      <LimitField value={limit} onChange={setLimit}/>
       <Appearance disabled={busy || confirming} color={color} icon={icon} onColor={setColor} onIcon={setIcon} />
       <ErrorNotice error={error} />
       <div className="form-actions">{account && <Button color="red" variant="light" type="button" className="danger-button" onClick={() => void archive()}>В архив</Button>}<Button className="primary-button" type="submit">{busy ? 'Сохраняем…' : 'Сохранить'}</Button></div>
@@ -41,6 +45,7 @@ export function AccountForm({ account, onClose, onSaved }: FormProps & { account
 
 export function CategoryForm({ category, kind, onClose, onSaved }: FormProps & { category?: Category; kind: 'expense' | 'income' }) {
  const { confirm, confirming } = useConfirm();
+  const [limit,setLimit]=useState(category?.monthlyLimitMinor == null ? '' : moneyInput(category.monthlyLimitMinor));
   const [name, setName] = useState(category?.name || '');
   const [color, setColor] = useState(category?.color || '#c87946');
   const [icon, setIcon] = useState(category?.icon || 'other');
@@ -48,7 +53,7 @@ export function CategoryForm({ category, kind, onClose, onSaved }: FormProps & {
   const [error, setError] = useState('');
   async function save(event: FormEvent) {
     event.preventDefault(); if (busy || confirming) return; setBusy(true); setError('');
-    try { await api(`/categories${category ? `/${category.id}` : ''}`, category ? 'PATCH' : 'POST', { kind, name, color, icon }); onSaved('Категория сохранена.'); onClose(); }
+    try { await api(`/categories${category ? `/${category.id}` : ''}`, category ? 'PATCH' : 'POST', { kind, name, color, icon, ...(kind === 'expense' ? {monthlyLimitMinor:limitValue(limit)} : {}) }); onSaved('Категория сохранена.'); onClose(); }
     catch (e) { setError(message(e)); } finally { setBusy(false); }
   }
   async function archive() {
@@ -58,7 +63,7 @@ export function CategoryForm({ category, kind, onClose, onSaved }: FormProps & {
   }
   return <Modal title={category ? 'Редактировать категорию' : kind === 'income' ? 'Новая категория дохода' : 'Новая категория расхода'} busy={busy || confirming} onClose={onClose}><form onSubmit={save}><fieldset disabled={busy || confirming}>
     <TextInput label="Название" className="field" autoFocus data-autofocus required maxLength={80} value={name} onChange={e => setName(e.target.value)} disabled={busy || confirming} />
-    <Appearance disabled={busy || confirming} color={color} icon={icon} onColor={setColor} onIcon={setIcon} /><ErrorNotice error={error} />
+    {kind === 'expense' && <LimitField value={limit} onChange={setLimit}/>}<Appearance disabled={busy || confirming} color={color} icon={icon} onColor={setColor} onIcon={setIcon} /><ErrorNotice error={error} />
     <div className="form-actions">{category && <Button color="red" variant="light" type="button" className="danger-button" onClick={() => void archive()}>В архив</Button>}<Button type="submit" className="primary-button">{busy ? 'Сохраняем…' : 'Сохранить'}</Button></div>
   </fieldset></form></Modal>;
 }
