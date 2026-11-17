@@ -205,7 +205,7 @@ export function ImportScreen({ draft, setDraft, active, revision, onChanged }: P
     <div className="import-account-bar"><Choice label="Счёт выписки" className="field" disabled={locked || !screen} value={accountId || ''} onChange={e => chooseAccount(Number(e.target.value))}><option value="">Выберите счёт</option>{screen?.accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</Choice><Button type="button" variant="subtle" className="text-button" disabled={locked} onClick={() => setNewAccount(true)}>+ Создать счёт</Button></div>
     <Dropzone openRef={openFile} onDrop={files => void upload(files)} disabled={locked || !accountId} activateOnClick={false} aria-busy={loading} inputProps={{'aria-label': 'PDF-выписка', accept: '.pdf,application/pdf'}}>
       <Group justify="space-between" wrap="wrap"><Icon name="card"/><div className="upload-copy"><Title order={2}>{loading ? 'Читаем вашу выписку…' : 'Перетащите PDF сюда'}</Title><p>Один файл с текстовым слоем, до 20 МиБ</p></div>
-      <Button type="button" disabled={locked || !accountId} onClick={() => openFile.current?.()}>{loading ? 'Обработка…' : 'Выбрать PDF'}</Button></Group>
+      <Button type="button" style={{ pointerEvents: 'auto' }} disabled={locked || !accountId} onClick={() => openFile.current?.()}>{loading ? 'Обработка…' : 'Выбрать PDF'}</Button></Group>
     </Dropzone>
     <p className="privacy-note">Файл обрабатывается на этом компьютере. До сохранения разметка живёт только в этой вкладке.</p>
     <ErrorNotice error={error} />

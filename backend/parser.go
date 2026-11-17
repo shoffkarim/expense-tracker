@@ -177,6 +177,8 @@ func parseStatement(r io.Reader) (ParseResult, error) {
 	switch detectStatementFormat(pages[0]) {
 	case statementV1:
 		return parseStatementV1(pages)
+	case statementSber:
+		return parseStatementSber(pages)
 	case statementV2:
 		return parseStatementV2(pages)
 	default:

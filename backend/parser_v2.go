@@ -15,6 +15,7 @@ const (
 	statementUnknown statementFormat = iota
 	statementV1
 	statementV2
+	statementSber
 )
 
 func detectStatementFormat(p page) statementFormat {
@@ -33,10 +34,14 @@ func detectStatementFormat(p page) statementFormat {
 	all := strings.Join(texts, " ")
 	v1 := v1Header && strings.Contains(all, "Выписка по договору") && strings.Contains(all, "Операции по карте")
 	v2 := v2HeaderEnd(lines) >= 0 && strings.Contains(all, "Справка о движении средств")
-	if v1 && !v2 {
+	sber := sberHeaderEnd(lines) >= 0 && strings.Contains(all, "Выписка по платёжному счёту") && strings.Contains(all, "СберБанк")
+	if sber && !v1 && !v2 {
+		return statementSber
+	}
+	if v1 && !v2 && !sber {
 		return statementV1
 	}
-	if v2 && !v1 {
+	if v2 && !v1 && !sber {
 		return statementV2
 	}
 	return statementUnknown
